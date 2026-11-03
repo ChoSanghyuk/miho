@@ -1,0 +1,18 @@
+server:
+  port: 4000
+  dashboardOrigin: http://localhost:5173
+claude:
+  defaultModel: claude-opus-5-5
+  permissionMode: default      # default | acceptEdits | auto
+  maxConcurrentSessions: 3
+projects:
+  rootDir: ~/workspace
+telegram:
+  botTokenEnv: TELEGRAM_BOT_TOKEN
+  chatId: 0                    # set to your chat ID (see the setup guide)
+  notify: [task_done, decision_needed, limit_reached, session_error]
+mcp:
+  codex:
+    enabled: false
+    command: codex
+    args: [mcp-server]

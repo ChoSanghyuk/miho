@@ -1,0 +1,11 @@
+{
+  "name": "ai-orchestrator",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter @orch/server start",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
