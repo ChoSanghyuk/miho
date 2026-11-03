@@ -6,7 +6,9 @@ import { z } from 'zod';
 import type { ServerEventType } from '@orch/shared';
 
 // apps/server/{src,dist}/config.* -> repo root
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+export const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+
+export const dbPath = `${repoRoot}orchestrator.sqlite`;
 
 const notifyEvents = [
   'task_done',

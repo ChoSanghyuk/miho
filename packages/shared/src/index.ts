@@ -42,7 +42,7 @@ export type AnsweredVia = 'web' | 'telegram';
 export type Decision = {
   id: string;
   sessionId: string;
-  status: 'pending' | 'answered';
+  status: 'pending' | 'answered' | 'expired';
   answeredVia: AnsweredVia | null;
 } & (
   | {
@@ -83,7 +83,8 @@ export type ServerEvent =
   | { type: 'session_output'; sessionId: string; message: SessionMessage }
   | { type: 'session_status'; sessionId: string; status: SessionStatus }
   | { type: 'decision_needed'; decision: Decision }
-  | { type: 'decision_resolved'; decisionId: string; answeredVia: AnsweredVia }
+  // answeredVia is null when the decision expired (interrupt, terminate, restart)
+  | { type: 'decision_resolved'; decisionId: string; answeredVia: AnsweredVia | null }
   | {
       type: 'task_done';
       sessionId: string;

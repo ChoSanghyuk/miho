@@ -1,0 +1,251 @@
+import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { and, asc, eq, inArray } from 'drizzle-orm';
+import type {
+  AnswerDecisionRequest,
+  AnsweredVia,
+  CreateProjectRequest,
+  Decision,
+  MessageRole,
+  Project,
+  Session,
+  SessionMessage,
+  SessionStatus,
+  StartSessionRequest,
+} from '@orch/shared';
+import type { Config } from './config.js';
+import type { Db } from './db/index.js';
+import { decisions, messages, projects, sessions } from './db/schema.js';
+import { EventBus } from './events.js';
+import type { SessionHost, SessionManager, SessionManagerFactory } from './sessions/types.js';
+
+export class HttpError extends Error {
+  constructor(
+    public statusCode: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+type DecisionAnswer = NonNullable<Decision['answer']>;
+type Waiter = { sessionId: string; resolve: (a: DecisionAnswer) => void; reject: (e: Error) => void };
+
+const now = () => new Date().toISOString();
+
+/** Owns all state. The API and Telegram call it; the session manager reports back through SessionHost. */
+export class Orchestrator implements SessionHost {
+  readonly bus = new EventBus();
+  private manager: SessionManager;
+  private waiters = new Map<string, Waiter>();
+
+  constructor(
+    private db: Db,
+    private config: Config,
+    managerFactory: SessionManagerFactory,
+  ) {
+    this.manager = managerFactory(this);
+    this.recoverAfterRestart();
+  }
+
+  // ---- Projects ----
+
+  createProject(req: CreateProjectRequest): Project {
+    const root = this.config.projects.rootDir;
+    const workdir = path.resolve(root, req.workdir.replace(/^~(?=$|\/)/, homedir()));
+    const rel = path.relative(root, workdir);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new HttpError(400, `workdir must be inside ${root}`);
+    }
+    if (!existsSync(workdir) || !statSync(workdir).isDirectory()) {
+      throw new HttpError(400, `workdir does not exist: ${workdir}`);
+    }
+    const project: Project = { id: randomUUID(), name: req.name, workdir, createdAt: now() };
+    this.db.insert(projects).values(project).run();
+    return project;
+  }
+
+  listProjects(): Project[] {
+    return this.db.select().from(projects).orderBy(asc(projects.createdAt)).all();
+  }
+
+  // ---- Sessions ----
+
+  listSessions(projectId: string): Session[] {
+    this.getProject(projectId);
+    return this.db.select().from(sessions).where(eq(sessions.projectId, projectId)).orderBy(asc(sessions.startedAt)).all();
+  }
+
+  listMessages(sessionId: string): SessionMessage[] {
+    this.getSession(sessionId);
+    return this.db
+      .select({ id: messages.id, sessionId: messages.sessionId, role: messages.role, body: messages.body, createdAt: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.sessionId, sessionId))
+      .orderBy(asc(messages.seq))
+      .all();
+  }
+
+  startSession(projectId: string, req: StartSessionRequest): Session {
+    const project = this.getProject(projectId);
+    const session: Session = {
+      id: randomUUID(),
+      projectId,
+      claudeSessionId: null,
+      status: 'running',
+      model: req.model ?? this.config.claude.defaultModel,
+      costUsd: 0,
+      startedAt: now(),
+      endedAt: null,
+    };
+    this.db.insert(sessions).values(session).run();
+    this.output(session.id, 'user', { text: req.prompt });
+    this.manager.start(session.id, { workdir: project.workdir, model: session.model, prompt: req.prompt });
+    return session;
+  }
+
+  sendMessage(sessionId: string, text: string): void {
+    this.requireStatus(sessionId, ['idle']);
+    this.output(sessionId, 'user', { text });
+    this.manager.send(sessionId, text);
+  }
+
+  interrupt(sessionId: string): void {
+    this.requireStatus(sessionId, ['running', 'waiting_decision']);
+    this.manager.interrupt(sessionId);
+    this.expireDecisions(sessionId);
+    this.setStatus(sessionId, 'idle');
+  }
+
+  terminate(sessionId: string): void {
+    const session = this.getSession(sessionId);
+    if (session.status === 'terminated') throw new HttpError(409, 'Session already terminated');
+    this.manager.stop(sessionId);
+    this.expireDecisions(sessionId);
+    this.db.update(sessions).set({ endedAt: now() }).where(eq(sessions.id, sessionId)).run();
+    this.setStatus(sessionId, 'terminated');
+  }
+
+  // ---- Decisions ----
+
+  listDecisions(status?: Decision['status']): Decision[] {
+    const query = this.db.select().from(decisions);
+    const rows = status ? query.where(eq(decisions.status, status)).all() : query.all();
+    return rows.map(toDecision);
+  }
+
+  answerDecision(decisionId: string, { answer }: AnswerDecisionRequest, via: AnsweredVia): Decision {
+    const row = this.db.select().from(decisions).where(eq(decisions.id, decisionId)).get();
+    if (!row) throw new HttpError(404, 'Decision not found');
+    if (row.status !== 'pending') throw new HttpError(409, `Decision already ${row.status}`);
+    if (row.kind === 'permission' && !('behavior' in answer)) {
+      throw new HttpError(400, 'Permission decisions take { behavior: "allow" | "deny" }');
+    }
+    if (row.kind === 'question') {
+      const options = (row.payload as { options: string[] }).options;
+      if (!('choice' in answer) || !options.includes(answer.choice)) {
+        throw new HttpError(400, `Question decisions take { choice } from: ${options.join(', ')}`);
+      }
+    }
+
+    this.db.update(decisions).set({ status: 'answered', answeredVia: via, answer }).where(eq(decisions.id, decisionId)).run();
+    this.bus.emit({ type: 'decision_resolved', decisionId, answeredVia: via });
+    this.setStatus(row.sessionId, 'running');
+    this.waiters.get(decisionId)?.resolve(answer);
+    this.waiters.delete(decisionId);
+    return toDecision({ ...row, status: 'answered', answeredVia: via, answer });
+  }
+
+  // ---- SessionHost (called by the session manager) ----
+
+  output(sessionId: string, role: MessageRole, body: unknown): void {
+    const message: SessionMessage = { id: randomUUID(), sessionId, role, body, createdAt: now() };
+    this.db.insert(messages).values(message).run();
+    this.bus.emit({ type: 'session_output', sessionId, message });
+  }
+
+  setStatus(sessionId: string, status: SessionStatus): void {
+    this.db.update(sessions).set({ status }).where(eq(sessions.id, sessionId)).run();
+    this.bus.emit({ type: 'session_status', sessionId, status });
+  }
+
+  requestDecision(sessionId: string, request: Pick<Decision, 'kind' | 'payload'>): Promise<DecisionAnswer> {
+    const row = {
+      id: randomUUID(),
+      sessionId,
+      kind: request.kind,
+      payload: request.payload,
+      status: 'pending' as const,
+      answeredVia: null,
+      answer: null,
+      createdAt: now(),
+    };
+    this.db.insert(decisions).values(row).run();
+    this.setStatus(sessionId, 'waiting_decision');
+    this.bus.emit({ type: 'decision_needed', decision: toDecision(row) });
+    return new Promise((resolve, reject) => this.waiters.set(row.id, { sessionId, resolve, reject }));
+  }
+
+  done(sessionId: string, r: { result: string; costUsd: number; durationMs: number }): void {
+    const session = this.getSession(sessionId);
+    this.db.update(sessions).set({ costUsd: session.costUsd + r.costUsd }).where(eq(sessions.id, sessionId)).run();
+    this.setStatus(sessionId, 'idle');
+    this.bus.emit({ type: 'task_done', sessionId, projectId: session.projectId, ...r });
+  }
+
+  fail(sessionId: string, error: string): void {
+    this.expireDecisions(sessionId);
+    this.setStatus(sessionId, 'error');
+    this.bus.emit({ type: 'session_error', sessionId, error });
+  }
+
+  // ---- internals ----
+
+  private getProject(id: string): Project {
+    const project = this.db.select().from(projects).where(eq(projects.id, id)).get();
+    if (!project) throw new HttpError(404, 'Project not found');
+    return project;
+  }
+
+  private getSession(id: string): Session {
+    const session = this.db.select().from(sessions).where(eq(sessions.id, id)).get();
+    if (!session) throw new HttpError(404, 'Session not found');
+    return session;
+  }
+
+  private requireStatus(sessionId: string, allowed: SessionStatus[]): void {
+    const { status } = this.getSession(sessionId);
+    if (!allowed.includes(status)) throw new HttpError(409, `Session is ${status}`);
+  }
+
+  private expireDecisions(sessionId: string): void {
+    const pending = this.db
+      .select({ id: decisions.id })
+      .from(decisions)
+      .where(and(eq(decisions.sessionId, sessionId), eq(decisions.status, 'pending')))
+      .all();
+    for (const { id } of pending) {
+      this.db.update(decisions).set({ status: 'expired' }).where(eq(decisions.id, id)).run();
+      this.bus.emit({ type: 'decision_resolved', decisionId: id, answeredVia: null });
+      this.waiters.get(id)?.reject(new Error('Decision cancelled'));
+      this.waiters.delete(id);
+    }
+  }
+
+  /** Nothing survives a restart in flight: mark those sessions interrupted and their decisions expired. */
+  private recoverAfterRestart(): void {
+    this.db
+      .update(sessions)
+      .set({ status: 'interrupted' })
+      .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision']))
+      .run();
+    this.db.update(decisions).set({ status: 'expired' }).where(eq(decisions.status, 'pending')).run();
+  }
+}
+
+function toDecision(row: typeof decisions.$inferSelect): Decision {
+  const { createdAt: _, ...decision } = row;
+  return decision as Decision;
+}
