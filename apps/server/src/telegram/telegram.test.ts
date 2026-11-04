@@ -33,6 +33,7 @@ async function setup(notify: Config['telegram']['notify'] = ['task_done', 'decis
     config,
     dbPath: ':memory:',
     sessionManager: (host) => new FakeSessionManager(host),
+    ownerToken: 't',
   });
   const warnings: string[] = [];
   const tg = createTelegram(orch, { token: 'test', chatId: OWNER, notify }, { info() {}, warn: (m) => warnings.push(m) }, { botInfo });

@@ -1,6 +1,8 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyServerOptions } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
+import { registerAuth } from './auth.js';
 import type { Config } from './config.js';
 import { openDb } from './db/index.js';
 import { HttpError, Orchestrator } from './orchestrator.js';
@@ -19,7 +21,10 @@ export async function buildApp(opts: {
   config: Config;
   dbPath: string;
   sessionManager: SessionManagerFactory;
-  logger?: boolean;
+  ownerToken: string;
+  /** Built dashboard to serve at `/` (production). Omit in dev, where Vite serves it. */
+  dashboardDir?: string;
+  logger?: FastifyServerOptions['logger'];
 }) {
   const db = openDb(opts.dbPath);
   const orch = new Orchestrator(db, opts.config, opts.sessionManager);
@@ -36,7 +41,9 @@ export async function buildApp(opts: {
     db.$client.close();
   });
 
+  registerAuth(app, opts.ownerToken);
   await app.register(websocket);
+  if (opts.dashboardDir) await app.register(fastifyStatic, { root: opts.dashboardDir });
 
   app.get('/api/health', async () => ({ ok: true }));
 
@@ -77,5 +84,5 @@ export async function buildApp(opts: {
     socket.on('close', unsubscribe);
   });
 
-  return { app, orch };
+  return { app, orch, db };
 }

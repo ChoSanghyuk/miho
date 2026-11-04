@@ -99,3 +99,4 @@ button:disabled { opacity: 0.45; cursor: default; }
   .topbar { gap: 12px; }
   .composer { flex-direction: column; align-items: stretch; }
 }
+.login { max-width: 420px; padding-top: 18vh; }

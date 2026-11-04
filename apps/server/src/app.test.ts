@@ -9,6 +9,7 @@ import type { Config } from './config.js';
 import { FakeSessionManager } from './sessions/fake.js';
 
 let root: string;
+const TOKEN = 'test-owner-token';
 
 before(() => {
   root = mkdtempSync(path.join(tmpdir(), 'orch-test-'));
@@ -30,6 +31,7 @@ async function setup(dbFile = `db-${Math.random()}.sqlite`) {
     config: config(),
     dbPath: path.join(root, dbFile),
     sessionManager: (host) => new FakeSessionManager(host),
+    ownerToken: TOKEN,
   });
   const events: ServerEvent[] = [];
   orch.bus.subscribe((e) => events.push(e));
@@ -44,7 +46,7 @@ async function setup(dbFile = `db-${Math.random()}.sqlite`) {
     throw new Error('Timed out waiting for event');
   };
   const req = async <T = unknown>(method: string, url: string, payload?: object) => {
-    const res = await app.inject({ method: method as 'GET', url, payload });
+    const res = await app.inject({ method: method as 'GET', url, payload, headers: { authorization: `Bearer ${TOKEN}` } });
     return { status: res.statusCode, body: (res.body ? res.json() : undefined) as T };
   };
   const createProject = async (workdir: string) =>
@@ -186,7 +188,8 @@ describe('backend core', () => {
     const t = await setup();
     await t.app.listen({ host: '127.0.0.1', port: 0 });
     const { port } = t.app.server.address() as { port: number };
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    // Same credential the dashboard uses: the login cookie. (Node's WebSocket accepts headers; browsers can't.)
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie: `orch_token=${TOKEN}` } } as never);
     await new Promise((resolve, reject) => {
       ws.onopen = resolve;
       ws.onerror = reject;
@@ -201,5 +204,27 @@ describe('backend core', () => {
     assert.ok(received.some((e) => e.type === 'task_done' && e.sessionId === session.id));
     ws.close();
     await t.app.close();
+  });
+});
+
+describe('owner token', () => {
+  test('rejects missing or wrong tokens, accepts bearer and login cookie', async () => {
+    const { app } = await setup();
+    const get = (headers: Record<string, string> = {}) => app.inject({ method: 'GET', url: '/api/projects', headers });
+
+    assert.equal((await get()).statusCode, 401);
+    assert.equal((await get({ authorization: 'Bearer nope' })).statusCode, 401);
+    assert.equal((await get({ authorization: `Bearer ${TOKEN}` })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'GET', url: '/ws' })).statusCode, 401);
+
+    const bad = await app.inject({ method: 'POST', url: '/api/login', payload: { token: 'nope' } });
+    assert.equal(bad.statusCode, 401);
+    const login = await app.inject({ method: 'POST', url: '/api/login', payload: { token: TOKEN } });
+    assert.equal(login.statusCode, 204);
+    const cookie = String(login.headers['set-cookie']);
+    assert.match(cookie, /HttpOnly/);
+    assert.equal((await get({ cookie: cookie.split(';')[0]! })).statusCode, 200);
+    assert.equal((await get({ cookie: 'orch_token=%E0%A4%A' })).statusCode, 401);
+    await app.close();
   });
 });

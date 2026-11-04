@@ -8,6 +8,9 @@ import type {
   StartSessionRequest,
 } from '@orch/shared';
 
+/** The server rejected the owner token (missing or expired cookie). */
+export class Unauthorized extends Error {}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -16,12 +19,15 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(err?.error ?? `${res.status} ${res.statusText}`);
+    const message = err?.error ?? `${res.status} ${res.statusText}`;
+    throw res.status === 401 ? new Unauthorized(message) : new Error(message);
   }
   return (res.status === 202 || res.status === 204 ? undefined : await res.json()) as T;
 }
 
 export const api = {
+  health: () => call<{ ok: boolean }>('GET', '/api/health'),
+  login: (token: string) => call<void>('POST', '/api/login', { token }),
   projects: () => call<Project[]>('GET', '/api/projects'),
   createProject: (req: CreateProjectRequest) => call<Project>('POST', '/api/projects', req),
   sessions: (projectId: string) => call<Session[]>('GET', `/api/projects/${projectId}/sessions`),
