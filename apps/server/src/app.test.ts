@@ -207,6 +207,18 @@ describe('backend core', () => {
   });
 });
 
+describe('client errors', () => {
+  test('malformed or empty JSON bodies get 400, not 500', async () => {
+    const { app } = await setup();
+    const headers = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+    const empty = await app.inject({ method: 'POST', url: '/api/projects', headers });
+    assert.equal(empty.statusCode, 400);
+    const broken = await app.inject({ method: 'POST', url: '/api/projects', headers, payload: '{nope' });
+    assert.equal(broken.statusCode, 400);
+    await app.close();
+  });
+});
+
 describe('owner token', () => {
   test('rejects missing or wrong tokens, accepts bearer and login cookie', async () => {
     const { app } = await setup();

@@ -33,6 +33,9 @@ export async function buildApp(opts: {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
     if (err instanceof z.ZodError) return reply.status(400).send({ error: z.prettifyError(err) });
+    // Fastify's own client errors (malformed JSON, empty JSON body, ...) keep their 4xx status.
+    const status = (err as { statusCode?: number }).statusCode;
+    if (status && status >= 400 && status < 500) return reply.status(status).send({ error: (err as Error).message });
     app.log.error(err);
     return reply.status(500).send({ error: 'Internal error' });
   });
