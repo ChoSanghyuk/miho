@@ -106,14 +106,32 @@ export class Orchestrator implements SessionHost {
     return session;
   }
 
+  /** Idle sessions take the message directly; interrupted, errored or terminated ones are resumed with it. */
   sendMessage(sessionId: string, text: string): void {
-    this.requireStatus(sessionId, ['idle']);
+    const session = this.getSession(sessionId);
+    if (session.status === 'idle') {
+      this.output(sessionId, 'user', { text });
+      this.manager.send(sessionId, text);
+      return;
+    }
+    if (!['interrupted', 'error', 'terminated'].includes(session.status)) {
+      throw new HttpError(409, `Session is ${session.status}`);
+    }
+    if (!session.claudeSessionId) throw new HttpError(409, 'Session cannot be resumed: it never started');
+    const project = this.getProject(session.projectId);
+    this.db.update(sessions).set({ endedAt: null }).where(eq(sessions.id, sessionId)).run();
     this.output(sessionId, 'user', { text });
-    this.manager.send(sessionId, text);
+    this.manager.start(sessionId, {
+      workdir: project.workdir,
+      model: session.model,
+      prompt: text,
+      resume: session.claudeSessionId,
+      priorCostUsd: session.costUsd,
+    });
   }
 
   interrupt(sessionId: string): void {
-    this.requireStatus(sessionId, ['running', 'waiting_decision']);
+    this.requireStatus(sessionId, ['queued', 'running', 'waiting_decision']);
     this.manager.interrupt(sessionId);
     this.expireDecisions(sessionId);
     this.setStatus(sessionId, 'idle');
@@ -126,6 +144,16 @@ export class Orchestrator implements SessionHost {
     this.expireDecisions(sessionId);
     this.db.update(sessions).set({ endedAt: now() }).where(eq(sessions.id, sessionId)).run();
     this.setStatus(sessionId, 'terminated');
+  }
+
+  /** Stops every live Claude process. Statuses are left as-is; the next startup marks them interrupted. */
+  shutdown(): void {
+    const live = this.db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision', 'idle']))
+      .all();
+    for (const { id } of live) this.manager.stop(id);
   }
 
   // ---- Decisions ----
@@ -195,6 +223,14 @@ export class Orchestrator implements SessionHost {
     this.bus.emit({ type: 'task_done', sessionId, projectId: session.projectId, ...r });
   }
 
+  setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
+    this.db.update(sessions).set({ claudeSessionId }).where(eq(sessions.id, sessionId)).run();
+  }
+
+  limitReached(sessionId: string, retryAt: string | null): void {
+    this.bus.emit({ type: 'limit_reached', sessionId, retryAt });
+  }
+
   fail(sessionId: string, error: string): void {
     this.expireDecisions(sessionId);
     this.setStatus(sessionId, 'error');
@@ -203,13 +239,13 @@ export class Orchestrator implements SessionHost {
 
   // ---- internals ----
 
-  private getProject(id: string): Project {
+  getProject(id: string): Project {
     const project = this.db.select().from(projects).where(eq(projects.id, id)).get();
     if (!project) throw new HttpError(404, 'Project not found');
     return project;
   }
 
-  private getSession(id: string): Session {
+  getSession(id: string): Session {
     const session = this.db.select().from(sessions).where(eq(sessions.id, id)).get();
     if (!session) throw new HttpError(404, 'Session not found');
     return session;
@@ -234,12 +270,12 @@ export class Orchestrator implements SessionHost {
     }
   }
 
-  /** Nothing survives a restart in flight: mark those sessions interrupted and their decisions expired. */
+  /** No Claude process survives a restart: mark live sessions interrupted (resumable) and expire their decisions. */
   private recoverAfterRestart(): void {
     this.db
       .update(sessions)
       .set({ status: 'interrupted' })
-      .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision']))
+      .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision', 'idle']))
       .run();
     this.db.update(decisions).set({ status: 'expired' }).where(eq(decisions.status, 'pending')).run();
   }

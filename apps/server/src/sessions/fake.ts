@@ -10,6 +10,7 @@ export class FakeSessionManager implements SessionManager {
   constructor(private host: SessionHost) {}
 
   start(sessionId: string, opts: { prompt: string }): void {
+    this.host.setClaudeSessionId(sessionId, `fake-${sessionId}`);
     this.send(sessionId, opts.prompt);
   }
 

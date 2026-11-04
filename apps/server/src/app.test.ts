@@ -81,10 +81,17 @@ describe('backend core', () => {
 
     assert.equal((await t.req('DELETE', `/api/sessions/${session.id}`)).status, 204);
     assert.equal((await t.req('DELETE', `/api/sessions/${session.id}`)).status, 409);
-    assert.equal((await t.req('POST', `/api/sessions/${session.id}/messages`, { text: 'x' })).status, 409);
     const [listed] = (await t.req<Session[]>('GET', `/api/projects/${project.id}/sessions`)).body;
     assert.equal(listed?.status, 'terminated');
     assert.ok(listed?.endedAt);
+    assert.equal(listed?.claudeSessionId, `fake-${session.id}`);
+
+    // A message to a terminated session resumes it
+    assert.equal((await t.req('POST', `/api/sessions/${session.id}/messages`, { text: 'back' })).status, 202);
+    await t.waitFor((e) => e.type === 'task_done' && e.result === 'Echo: back');
+    const [resumed] = (await t.req<Session[]>('GET', `/api/projects/${project.id}/sessions`)).body;
+    assert.equal(resumed?.status, 'idle');
+    assert.equal(resumed?.endedAt, null);
     await t.app.close();
   });
 
@@ -168,6 +175,10 @@ describe('backend core', () => {
     assert.equal(listed?.status, 'interrupted');
     assert.equal((await second.req<Decision[]>('GET', '/api/decisions?status=pending')).body.length, 0);
     assert.equal((await second.req<SessionMessage[]>('GET', `/api/sessions/${session.id}/messages`)).body.length, 1);
+
+    // The interrupted session resumes with the next message
+    assert.equal((await second.req('POST', `/api/sessions/${session.id}/messages`, { text: 'continue' })).status, 202);
+    await second.waitFor((e) => e.type === 'task_done' && e.result === 'Echo: continue');
     await second.app.close();
   });
 

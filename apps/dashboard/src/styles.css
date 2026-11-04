@@ -1,0 +1,101 @@
+:root {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --border: #e3e2de;
+  --text: #1f1f1d;
+  --muted: #6b6a66;
+  --accent: #2f6fde;
+  --accent-text: #ffffff;
+  --danger: #c2412d;
+  --good: #2e8b57;
+  --warn: #b7791f;
+  --code-bg: #f1f0ec;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --surface: #1f1f1d;
+    --border: #34332f;
+    --text: #ecebe7;
+    --muted: #9b9a95;
+    --accent: #6b9bf2;
+    --accent-text: #0f1a2e;
+    --danger: #ef7a66;
+    --good: #5cc28d;
+    --warn: #e2b04a;
+    --code-bg: #2a2926;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+a { color: inherit; }
+h1 { font-size: 22px; margin: 8px 0; }
+h2 { font-size: 16px; margin: 24px 0 8px; }
+pre { margin: 8px 0 0; padding: 8px; background: var(--code-bg); border-radius: 6px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.muted { color: var(--muted); }
+.error { color: var(--danger); margin: 8px 0 0; }
+
+.shell { max-width: 960px; margin: 0 auto; padding: 0 16px 48px; }
+.topbar { display: flex; align-items: center; gap: 20px; padding: 14px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.topbar nav { display: flex; gap: 16px; }
+.topbar nav a, .brand { text-decoration: none; }
+.brand { font-weight: 600; }
+.badge { margin-left: 6px; padding: 0 7px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12px; }
+.conn { margin-left: auto; font-size: 12px; }
+.conn.on { color: var(--good); }
+.conn.off { color: var(--warn); }
+.crumbs { margin: 0; color: var(--muted); font-size: 13px; }
+
+.card { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+a.card { text-decoration: none; }
+a.card:hover { border-color: var(--accent); }
+.row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.grow-right { margin-left: auto; }
+.list { list-style: none; padding: 0; margin: 0; }
+.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.form-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.form-row input { flex: 1 1 200px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+input, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; resize: vertical; }
+button { padding: 7px 14px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-text); font: inherit; cursor: pointer; }
+button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: 0.45; cursor: default; }
+
+.pill { padding: 1px 9px; border-radius: 10px; font-size: 12px; border: 1px solid currentColor; white-space: nowrap; }
+.pill-running, .pill-queued { color: var(--accent); }
+.pill-waiting_decision { color: var(--warn); }
+.pill-idle { color: var(--good); }
+.pill-error { color: var(--danger); }
+.pill-terminated, .pill-interrupted { color: var(--muted); }
+
+.console { margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.msg .text { white-space: pre-wrap; word-break: break-word; }
+.msg.user { background: var(--code-bg); }
+.msg.tool { padding: 6px 12px; font-size: 13px; }
+.msg.tool summary { cursor: pointer; color: var(--muted); }
+.msg.tool-error summary { color: var(--danger); }
+.working { margin: 0; }
+.decision { border-color: var(--warn); }
+.decision-title { font-size: 13px; color: var(--warn); }
+.composer { display: flex; gap: 8px; align-items: flex-end; position: sticky; bottom: 0; background: var(--bg); padding: 8px 0; }
+
+@media (max-width: 600px) {
+  .topbar { gap: 12px; }
+  .composer { flex-direction: column; align-items: stretch; }
+}

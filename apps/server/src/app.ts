@@ -31,7 +31,10 @@ export async function buildApp(opts: {
     app.log.error(err);
     return reply.status(500).send({ error: 'Internal error' });
   });
-  app.addHook('onClose', async () => db.$client.close());
+  app.addHook('onClose', async () => {
+    orch.shutdown();
+    db.$client.close();
+  });
 
   await app.register(websocket);
 
@@ -49,7 +52,8 @@ export async function buildApp(opts: {
     return orch.startSession(idParams.parse(req.params).id, startSessionBody.parse(req.body));
   });
 
-  app.get('/api/sessions/:id/messages', async (req) => orch.listMessages(idParams.parse(req.params).id));
+  app.get('/api/sessions/:id', async (req) => orch.getSession(idParams.parse(req.params).id));
+  app.get('/api/sessions/:id/messages',async (req) => orch.listMessages(idParams.parse(req.params).id));
   app.post('/api/sessions/:id/messages', async (req, reply) => {
     orch.sendMessage(idParams.parse(req.params).id, sendMessageBody.parse(req.body).text);
     return reply.status(202).send();
