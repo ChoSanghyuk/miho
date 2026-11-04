@@ -8,10 +8,12 @@ import type {
   AnsweredVia,
   CreateProjectRequest,
   Decision,
+  Guideline,
+  GuidelineRequest,
   MessageRole,
   Project,
   Role,
-  RoleInput,
+  RoleRequest,
   Session,
   SessionMessage,
   SessionStatus,
@@ -19,7 +21,7 @@ import type {
 } from '@orch/shared';
 import type { Config } from './config.js';
 import type { Db } from './db/index.js';
-import { decisions, messages, projects, roles, sessions } from './db/schema.js';
+import { decisions, guidelines, messages, projects, roles, sessions } from './db/schema.js';
 import { EventBus } from './events.js';
 import type { SessionHost, SessionManager, SessionManagerFactory } from './sessions/types.js';
 
@@ -39,6 +41,19 @@ const now = () => new Date().toISOString();
 
 /** A role session runs in its role folder, so Claude Code loads that role's CLAUDE.md. */
 const sessionCwd = (project: Project, role: string | null) => (role ? path.join(project.workdir, role) : project.workdir);
+
+/** A role's CLAUDE.md body: its guidelines as `## name` sections, with its own text at descriptionIndex. */
+function composeRole(
+  role: { description: string; guidelineIds: string[]; descriptionIndex: number },
+  byId: Map<string, Guideline>,
+): string {
+  const parts = role.guidelineIds.map((id) => {
+    const g = byId.get(id)!;
+    return `## ${g.name}\n\n${g.description}`;
+  });
+  parts.splice(role.descriptionIndex, 0, role.description);
+  return parts.filter((p) => p.trim()).join('\n\n');
+}
 
 /** Role names double as folder names: no slashes, no leading dot. */
 function assertRoleName(name: string): void {
@@ -105,26 +120,60 @@ export class Orchestrator implements SessionHost {
   // ---- Roles (predefined; projects copy them into folders at creation) ----
 
   listRoles(): Role[] {
-    return this.db.select().from(roles).orderBy(asc(roles.createdAt)).all();
+    const byId = this.guidelinesById();
+    return this.db
+      .select()
+      .from(roles)
+      .orderBy(asc(roles.createdAt))
+      .all()
+      .map((r) => ({ ...r, content: composeRole(r, byId) }));
   }
 
-  createRole(req: RoleInput): Role {
+  createRole(req: RoleRequest): Role {
     this.assertRoleNameFree(req.name);
-    const role: Role = { id: randomUUID(), name: req.name, description: req.description, createdAt: now() };
-    this.db.insert(roles).values(role).run();
-    return role;
+    const row = { id: randomUUID(), createdAt: now(), ...this.roleFields(req) };
+    this.db.insert(roles).values(row).run();
+    return { ...row, content: composeRole(row, this.guidelinesById()) };
   }
 
-  updateRole(id: string, req: RoleInput): Role {
+  updateRole(id: string, req: RoleRequest): Role {
     const role = this.getRole(id);
     this.assertRoleNameFree(req.name, id);
-    this.db.update(roles).set({ name: req.name, description: req.description }).where(eq(roles.id, id)).run();
-    return { ...role, name: req.name, description: req.description };
+    const fields = this.roleFields(req);
+    this.db.update(roles).set(fields).where(eq(roles.id, id)).run();
+    return { ...role, ...fields, content: composeRole(fields, this.guidelinesById()) };
   }
 
   deleteRole(id: string): void {
     this.getRole(id);
     this.db.delete(roles).where(eq(roles.id, id)).run();
+  }
+
+  // ---- Guidelines (shared sections composed into roles) ----
+
+  listGuidelines(): Guideline[] {
+    return this.db.select().from(guidelines).orderBy(asc(guidelines.createdAt)).all();
+  }
+
+  createGuideline(req: GuidelineRequest): Guideline {
+    this.assertGuidelineNameFree(req.name);
+    const guideline: Guideline = { id: randomUUID(), name: req.name, description: req.description, createdAt: now() };
+    this.db.insert(guidelines).values(guideline).run();
+    return guideline;
+  }
+
+  updateGuideline(id: string, req: GuidelineRequest): Guideline {
+    const guideline = this.getGuideline(id);
+    this.assertGuidelineNameFree(req.name, id);
+    this.db.update(guidelines).set({ name: req.name, description: req.description }).where(eq(guidelines.id, id)).run();
+    return { ...guideline, name: req.name, description: req.description };
+  }
+
+  deleteGuideline(id: string): void {
+    this.getGuideline(id);
+    const users = this.db.select().from(roles).all().filter((r) => r.guidelineIds.includes(id));
+    if (users.length) throw new HttpError(409, `guideline is used by roles: ${users.map((r) => r.name).join(', ')}`);
+    this.db.delete(guidelines).where(eq(guidelines.id, id)).run();
   }
 
   // ---- Sessions ----
@@ -305,10 +354,40 @@ export class Orchestrator implements SessionHost {
     return project;
   }
 
-  private getRole(id: string): Role {
+  private getRole(id: string) {
     const role = this.db.select().from(roles).where(eq(roles.id, id)).get();
     if (!role) throw new HttpError(404, 'Role not found');
     return role;
+  }
+
+  /** Validates and normalizes a role request into stored columns. */
+  private roleFields(req: RoleRequest) {
+    const guidelineIds = req.guidelineIds ?? [];
+    const descriptionIndex = req.descriptionIndex ?? 0;
+    const byId = this.guidelinesById();
+    const unknown = guidelineIds.find((g) => !byId.has(g));
+    if (unknown) throw new HttpError(400, `unknown guideline: ${unknown}`);
+    if (new Set(guidelineIds).size !== guidelineIds.length) throw new HttpError(400, 'duplicate guidelines');
+    if (!Number.isInteger(descriptionIndex) || descriptionIndex < 0 || descriptionIndex > guidelineIds.length) {
+      throw new HttpError(400, `descriptionIndex must be between 0 and ${guidelineIds.length}`);
+    }
+    return { name: req.name, description: req.description, guidelineIds, descriptionIndex };
+  }
+
+  private guidelinesById(): Map<string, Guideline> {
+    return new Map(this.listGuidelines().map((g) => [g.id, g]));
+  }
+
+  private getGuideline(id: string): Guideline {
+    const guideline = this.db.select().from(guidelines).where(eq(guidelines.id, id)).get();
+    if (!guideline) throw new HttpError(404, 'Guideline not found');
+    return guideline;
+  }
+
+  private assertGuidelineNameFree(name: string, exceptId?: string): void {
+    if (this.listGuidelines().some((g) => g.name === name && g.id !== exceptId)) {
+      throw new HttpError(409, `a guideline named "${name}" already exists`);
+    }
   }
 
   private assertRoleNameFree(name: string, exceptId?: string): void {

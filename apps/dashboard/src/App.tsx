@@ -3,13 +3,14 @@ import { useEffect, useState } from 'react';
 import { api, Unauthorized } from './api';
 import { LoginPage } from './pages/LoginPage';
 import { DecisionsPage } from './pages/DecisionsPage';
+import { GuidelinesPage } from './pages/GuidelinesPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { RolesPage } from './pages/RolesPage';
 import { SessionPage } from './pages/SessionPage';
 import { useEvents } from './useEvents';
 
-/** Hash routes: #/  #/projects/:name  #/sessions/:id  #/decisions  #/roles */
+/** Hash routes: #/  #/projects/:name  #/sessions/:id  #/decisions  #/roles  #/guidelines */
 function useRoute(): string[] {
   const read = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   const [route, setRoute] = useState(read);
@@ -41,6 +42,7 @@ function Shell() {
         <nav>
           <a href="#/">Projects</a>
           <a href="#/roles">Roles</a>
+          <a href="#/guidelines">Guidelines</a>
           <a href="#/decisions">
             Decisions
             {!!pending.data?.length && <span className="badge">{pending.data.length}</span>}
@@ -57,6 +59,8 @@ function Shell() {
           <DecisionsPage />
         ) : section === 'roles' ? (
           <RolesPage />
+        ) : section === 'guidelines' ? (
+          <GuidelinesPage />
         ) : (
           <ProjectsPage />
         )}

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import type { Decision, Project, Role, ServerEvent, Session, SessionMessage } from '@orch/shared';
+import type { Decision, Guideline, Project, Role, ServerEvent, Session, SessionMessage } from '@orch/shared';
 import { buildApp } from './app.js';
 import type { Config } from './config.js';
 import type { SessionManagerFactory } from './sessions/types.js';
@@ -244,6 +244,42 @@ describe('roles', () => {
     assert.equal((await t.req('DELETE', `/api/roles/${pm.body.id}`)).status, 204);
     assert.equal((await t.req('DELETE', `/api/roles/${pm.body.id}`)).status, 404);
     assert.equal((await t.req('PUT', '/api/roles/nope', { name: 'x', description: '' })).status, 404);
+    await t.app.close();
+  });
+
+  test('CRUD for guidelines; a guideline in use cannot be deleted', async () => {
+    const t = await setup();
+    const g = await t.req<Guideline>('POST', '/api/guidelines', { name: 'Git', description: 'Small commits.' });
+    assert.equal(g.status, 201);
+    assert.equal((await t.req('POST', '/api/guidelines', { name: 'Git', description: '' })).status, 409);
+    const upd = await t.req<Guideline>('PUT', `/api/guidelines/${g.body.id}`, { name: 'Git rules', description: 'Tiny commits.' });
+    assert.equal(upd.body.name, 'Git rules');
+    assert.equal((await t.req<Guideline[]>('GET', '/api/guidelines')).body.length, 1);
+    assert.equal((await t.req('PUT', '/api/guidelines/nope', { name: 'x', description: '' })).status, 404);
+    const role = await t.req<Role>('POST', '/api/roles', { name: 'dev', description: '', guidelineIds: [g.body.id], descriptionIndex: 1 });
+    const inUse = await t.req<{ error: string }>('DELETE', `/api/guidelines/${g.body.id}`);
+    assert.equal(inUse.status, 409);
+    assert.match(inUse.body.error, /dev/);
+    await t.req('DELETE', `/api/roles/${role.body.id}`);
+    assert.equal((await t.req('DELETE', `/api/guidelines/${g.body.id}`)).status, 204);
+    assert.equal((await t.req('DELETE', `/api/guidelines/${g.body.id}`)).status, 404);
+    await t.app.close();
+  });
+
+  test('role content composes guidelines in the chosen order, live', async () => {
+    const t = await setup();
+    const g1 = (await t.req<Guideline>('POST', '/api/guidelines', { name: 'G1', description: 'one' })).body;
+    const g2 = (await t.req<Guideline>('POST', '/api/guidelines', { name: 'G2', description: 'two' })).body;
+    const body = (ids: string[], idx: number) => ({ name: 'pm', description: 'own', guidelineIds: ids, descriptionIndex: idx });
+    assert.equal((await t.req('POST', '/api/roles', body(['nope'], 0))).status, 400);
+    assert.equal((await t.req('POST', '/api/roles', body([g1.id, g1.id], 0))).status, 400);
+    assert.equal((await t.req('POST', '/api/roles', body([g1.id], 2))).status, 400);
+    const role = await t.req<Role>('POST', '/api/roles', body([g2.id, g1.id], 1));
+    assert.equal(role.status, 201);
+    assert.equal(role.body.content, '## G2\n\ntwo\n\nown\n\n## G1\n\none');
+    await t.req('PUT', `/api/guidelines/${g1.id}`, { name: 'G1', description: 'uno' });
+    const [listed] = (await t.req<Role[]>('GET', '/api/roles')).body;
+    assert.equal(listed?.content, '## G2\n\ntwo\n\nown\n\n## G1\n\nuno');
     await t.app.close();
   });
 

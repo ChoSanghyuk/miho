@@ -18,10 +18,24 @@ export interface Project {
   createdAt: string;
 }
 
-export interface Role {
+export interface Guideline {
   id: string;
   name: string;
   description: string;
+  createdAt: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  /** The role's own text. */
+  description: string;
+  /** Guidelines composed into the role, in order. */
+  guidelineIds: string[];
+  /** Position of `description` among the guidelines (0 = first, guidelineIds.length = last). */
+  descriptionIndex: number;
+  /** Computed: the full body written under `# Role: <name>` in CLAUDE.md. */
+  content: string;
   createdAt: string;
 }
 
@@ -85,8 +99,17 @@ export interface CreateProjectRequest {
   roles?: RoleInput[];
 }
 
-export type CreateRoleRequest = RoleInput;
-export type UpdateRoleRequest = RoleInput;
+export interface RoleRequest {
+  name: string;
+  description: string;
+  guidelineIds?: string[];
+  descriptionIndex?: number;
+}
+
+export interface GuidelineRequest {
+  name: string;
+  description: string;
+}
 
 export interface StartSessionRequest {
   prompt: string;

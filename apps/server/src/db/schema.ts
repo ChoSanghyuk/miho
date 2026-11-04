@@ -13,6 +13,15 @@ export const roles = sqliteTable('roles', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   description: text('description').notNull(),
+  guidelineIds: text('guideline_ids_json', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  descriptionIndex: integer('description_index').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+});
+
+export const guidelines = sqliteTable('guidelines', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
   createdAt: text('created_at').notNull(),
 });
 

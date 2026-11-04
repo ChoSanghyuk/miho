@@ -9,6 +9,10 @@ import { HttpError, Orchestrator } from './orchestrator.js';
 import type { SessionManagerFactory } from './sessions/types.js';
 
 const roleBody = z.object({ name: z.string().min(1), description: z.string() });
+const roleRequestBody = roleBody.extend({
+  guidelineIds: z.array(z.string()).optional(),
+  descriptionIndex: z.number().int().optional(),
+});
 const createProjectBody = z.object({
   name: z.string().min(1),
   workdir: z.string().min(1),
@@ -69,11 +73,22 @@ export async function buildApp(opts: {
   app.get('/api/roles', async () => orch.listRoles());
   app.post('/api/roles', async (req, reply) => {
     reply.status(201);
-    return orch.createRole(roleBody.parse(req.body));
+    return orch.createRole(roleRequestBody.parse(req.body));
   });
-  app.put('/api/roles/:id', async (req) => orch.updateRole(idParams.parse(req.params).id, roleBody.parse(req.body)));
+  app.put('/api/roles/:id', async (req) => orch.updateRole(idParams.parse(req.params).id, roleRequestBody.parse(req.body)));
   app.delete('/api/roles/:id', async (req, reply) => {
     orch.deleteRole(idParams.parse(req.params).id);
+    return reply.status(204).send();
+  });
+
+  app.get('/api/guidelines', async () => orch.listGuidelines());
+  app.post('/api/guidelines', async (req, reply) => {
+    reply.status(201);
+    return orch.createGuideline(roleBody.parse(req.body));
+  });
+  app.put('/api/guidelines/:id', async (req) => orch.updateGuideline(idParams.parse(req.params).id, roleBody.parse(req.body)));
+  app.delete('/api/guidelines/:id', async (req, reply) => {
+    orch.deleteGuideline(idParams.parse(req.params).id);
     return reply.status(204).send();
   });
 

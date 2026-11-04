@@ -16,8 +16,11 @@ export function ProjectsPage() {
   const [extraName, setExtraName] = useState('');
   const [extraDesc, setExtraDesc] = useState('');
 
-  const options: RoleInput[] = [...(roles.data ?? []), ...extra];
-  const selected = multi ? options.filter((r) => checked.has(r.name)) : undefined;
+  // Predefined roles send their composed content (own text + guidelines) as the CLAUDE.md body.
+  const options: (RoleInput & { content?: string })[] = [...(roles.data ?? []), ...extra];
+  const selected = multi
+    ? options.filter((r) => checked.has(r.name)).map((r) => ({ name: r.name, description: r.content ?? r.description }))
+    : undefined;
   const toggle = (roleName: string) =>
     setChecked((s) => {
       const next = new Set(s);

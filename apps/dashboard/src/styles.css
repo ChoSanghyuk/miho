@@ -73,6 +73,10 @@ input, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border
 input[type='checkbox'], input[type='radio'] { width: auto; margin: 0; }
 select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .check { display: flex; align-items: baseline; gap: 8px; margin: 6px 0; cursor: pointer; }
+.order { margin: 4px 0 0; padding-left: 22px; }
+.order li { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.order li span { flex: 1; }
+.order button { padding: 2px 8px; }
 button { padding: 7px 14px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-text); font: inherit; cursor: pointer; }
 button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
 button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
