@@ -8,9 +8,9 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { SessionPage } from './pages/SessionPage';
 import { useEvents } from './useEvents';
 
-/** Hash routes: #/  #/projects/:id  #/sessions/:id  #/decisions */
+/** Hash routes: #/  #/projects/:name  #/sessions/:id  #/decisions */
 function useRoute(): string[] {
-  const read = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const read = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   const [route, setRoute] = useState(read);
   useEffect(() => {
     const onChange = () => setRoute(read());
@@ -48,7 +48,7 @@ function Shell() {
       </header>
       <main>
         {section === 'projects' && id ? (
-          <ProjectPage projectId={id} />
+          <ProjectPage projectName={id} />
         ) : section === 'sessions' && id ? (
           <SessionPage sessionId={id} />
         ) : section === 'decisions' ? (

@@ -11,6 +11,16 @@ import type {
 /** The server rejected the owner token (missing or expired cookie). */
 export class Unauthorized extends Error {}
 
+/** Any other non-2xx response; `status` lets callers react to specific codes. */
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -20,7 +30,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (!res.ok) {
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
     const message = err?.error ?? `${res.status} ${res.statusText}`;
-    throw res.status === 401 ? new Unauthorized(message) : new Error(message);
+    throw res.status === 401 ? new Unauthorized(message) : new ApiError(res.status, message);
   }
   return (res.status === 202 || res.status === 204 ? undefined : await res.json()) as T;
 }

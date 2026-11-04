@@ -62,6 +62,8 @@ export type Decision = {
 export interface CreateProjectRequest {
   name: string;
   workdir: string;
+  /** Create `workdir` if it doesn't exist. Without it, a missing workdir is a 404. */
+  createDir?: boolean;
 }
 
 export interface StartSessionRequest {

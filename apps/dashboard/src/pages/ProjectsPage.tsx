@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 
 export function ProjectsPage() {
   const qc = useQueryClient();
@@ -8,12 +8,20 @@ export function ProjectsPage() {
   const [name, setName] = useState('');
   const [workdir, setWorkdir] = useState('');
   const create = useMutation({
-    mutationFn: () => api.createProject({ name, workdir }),
+    mutationFn: async () => {
+      try {
+        return await api.createProject({ name, workdir });
+      } catch (e) {
+        // 404 = the folder doesn't exist yet; offer to create it.
+        if (!(e instanceof ApiError && e.status === 404) || !confirm(`${e.message}\n\nCreate this directory?`)) throw e;
+        return api.createProject({ name, workdir, createDir: true });
+      }
+    },
     onSuccess: (p) => {
       setName('');
       setWorkdir('');
       void qc.invalidateQueries({ queryKey: ['projects'] });
-      location.hash = `#/projects/${p.id}`;
+      location.hash = `#/projects/${encodeURIComponent(p.name)}`;
     },
   });
 
@@ -42,7 +50,7 @@ export function ProjectsPage() {
       <ul className="list">
         {projects.data?.map((p) => (
           <li key={p.id}>
-            <a href={`#/projects/${p.id}`} className="card row">
+            <a href={`#/projects/${encodeURIComponent(p.name)}`} className="card row">
               <strong>{p.name}</strong>
               <span className="muted mono">{p.workdir}</span>
             </a>

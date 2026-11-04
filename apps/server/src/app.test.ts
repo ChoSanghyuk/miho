@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -101,8 +101,24 @@ describe('backend core', () => {
     const t = await setup();
     assert.equal((await t.req('POST', '/api/projects', { name: 'x', workdir: '/etc' })).status, 400);
     assert.equal((await t.req('POST', '/api/projects', { name: 'x', workdir: '../' })).status, 400);
-    assert.equal((await t.req('POST', '/api/projects', { name: 'x', workdir: 'nope' })).status, 400);
+    assert.equal((await t.req('POST', '/api/projects', { name: 'x', workdir: 'nope' })).status, 404);
     assert.equal((await t.req('POST', '/api/projects', { name: '' })).status, 400);
+    await t.app.close();
+  });
+
+  test('creates a missing workdir only when asked', async () => {
+    const t = await setup();
+    const res = await t.req<Project>('POST', '/api/projects', { name: 'made', workdir: 'new/dir', createDir: true });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.workdir, path.join(root, 'new', 'dir'));
+    assert.ok(statSync(res.body.workdir).isDirectory());
+    await t.app.close();
+  });
+
+  test('rejects duplicate project names', async () => {
+    const t = await setup();
+    await t.createProject('alpha');
+    assert.equal((await t.req('POST', '/api/projects', { name: 'alpha', workdir: 'beta' })).status, 409);
     await t.app.close();
   });
 

@@ -107,7 +107,7 @@ Rules that keep the domains separate:
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `projects` | id, name, workdir, created_at | `workdir` is absolute, must exist, and must be inside `projects.rootDir` |
+| `projects` | id, name, workdir, created_at | `name` is unique (checked on create, not by an index) and is what dashboard routes use. `workdir` is absolute, inside `projects.rootDir`, and must exist unless `createDir` is set |
 | `sessions` | id, project_id, claude_session_id, status, model, cost_usd, started_at, ended_at | `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
 | `messages` | seq (autoincrement), id, session_id, role, body_json | console history; ordered by `seq`. Roles: user, assistant, tool, system |
 | `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options} → answer {choice}. Status pending → answered or expired |
@@ -192,7 +192,7 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 |---|---|
 | `POST /api/login` `{token}` | sets the HttpOnly `orch_token` cookie (30 days) |
 | `GET /api/health` | `{ok:true}`; the dashboard also uses it as its "logged in?" check |
-| `GET/POST /api/projects` | list / create `{name, workdir}` (workdir relative to or inside `rootDir`) |
+| `GET/POST /api/projects` | list / create `{name, workdir, createDir?}` (workdir relative to or inside `rootDir`). Missing workdir → 404 unless `createDir: true`, which creates it; duplicate name → 409 |
 | `GET/POST /api/projects/:id/sessions` | list / start `{prompt, model?}` |
 | `GET /api/sessions/:id` | one session |
 | `GET/POST /api/sessions/:id/messages` | history / send `{text}` (202). Resumes if interrupted, error or terminated |
@@ -208,6 +208,8 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 **Dashboard.**
 - **Login:** `App` first queries `/api/health`. A 401 shows `LoginPage`, which posts the token and gets the cookie.
+- **Routes:** hash routes `#/`, `#/projects/<name>` (URL-encoded project name, resolved from the projects list), `#/sessions/<id>`, `#/decisions`.
+- **Create project:** if the server answers 404 (folder missing), the page asks with `confirm()` and retries with `createDir: true`.
 - **Live updates:** `useEvents` opens `/ws`. Browsers send the cookie on the WebSocket handshake, which is why auth uses a cookie rather than a header. Events update the TanStack Query cache directly (`session_output` appends messages, `session_status` updates a session) or invalidate queries (decisions, sessions). After a reconnect, every query is invalidated to catch up.
 - **Dev setup:** in dev, Vite on :5173 proxies `/api` and `/ws` to :4000.
 

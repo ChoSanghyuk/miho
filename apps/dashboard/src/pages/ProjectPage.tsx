@@ -3,10 +3,15 @@ import { useState } from 'react';
 import { api } from '../api';
 import { StatusPill } from '../components/StatusPill';
 
-export function ProjectPage({ projectId }: { projectId: string }) {
+export function ProjectPage({ projectName }: { projectName: string }) {
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
-  const sessions = useQuery({ queryKey: ['sessions', projectId], queryFn: () => api.sessions(projectId) });
-  const project = projects.data?.find((p) => p.id === projectId);
+  const project = projects.data?.find((p) => p.name === projectName);
+  const projectId = project?.id ?? '';
+  const sessions = useQuery({
+    queryKey: ['sessions', projectId],
+    queryFn: () => api.sessions(projectId),
+    enabled: !!project,
+  });
   const [prompt, setPrompt] = useState('');
   const start = useMutation({
     mutationFn: () => api.startSession(projectId, { prompt }),
@@ -18,7 +23,8 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       <p className="crumbs">
         <a href="#/">Projects</a> /
       </p>
-      <h1>{project?.name ?? 'Project'}</h1>
+      <h1>{projectName}</h1>
+      {projects.data && !project && <p className="error">No project named "{projectName}".</p>}
       <p className="muted mono">{project?.workdir}</p>
 
       <form
@@ -36,7 +42,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           required
         />
         <div className="actions">
-          <button disabled={start.isPending}>Start session</button>
+          <button disabled={start.isPending || !project}>Start session</button>
         </div>
         {start.error && <p className="error">{start.error.message}</p>}
       </form>

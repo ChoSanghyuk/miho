@@ -8,7 +8,11 @@ import { openDb } from './db/index.js';
 import { HttpError, Orchestrator } from './orchestrator.js';
 import type { SessionManagerFactory } from './sessions/types.js';
 
-const createProjectBody = z.object({ name: z.string().min(1), workdir: z.string().min(1) });
+const createProjectBody = z.object({
+  name: z.string().min(1),
+  workdir: z.string().min(1),
+  createDir: z.boolean().optional(),
+});
 const startSessionBody = z.object({ prompt: z.string().min(1), model: z.string().min(1).optional() });
 const sendMessageBody = z.object({ text: z.string().min(1) });
 const answerDecisionBody = z.object({

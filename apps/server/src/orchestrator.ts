@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { and, asc, eq, inArray } from 'drizzle-orm';
@@ -59,8 +59,14 @@ export class Orchestrator implements SessionHost {
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       throw new HttpError(400, `workdir must be inside ${root}`);
     }
-    if (!existsSync(workdir) || !statSync(workdir).isDirectory()) {
-      throw new HttpError(400, `workdir does not exist: ${workdir}`);
+    if (this.listProjects().some((p) => p.name === req.name)) {
+      throw new HttpError(409, `a project named "${req.name}" already exists`);
+    }
+    if (!existsSync(workdir)) {
+      if (!req.createDir) throw new HttpError(404, `workdir does not exist: ${workdir}`);
+      mkdirSync(workdir, { recursive: true });
+    } else if (!statSync(workdir).isDirectory()) {
+      throw new HttpError(400, `workdir is not a directory: ${workdir}`);
     }
     const project: Project = { id: randomUUID(), name: req.name, workdir, createdAt: now() };
     this.db.insert(projects).values(project).run();
