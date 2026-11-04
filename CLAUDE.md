@@ -83,3 +83,10 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+
+
+## RULES
+
+[IMPORTANT] When figuring out the project code, first open the structure.md to get general idea of the project. Then read code files only related to the current job. 
+
+[IMPORTANT] When the new changes are made, always check a update of the structure.md is needed. Keep the structure.md as a core source of project reference. Most importantly, the structure.md should remain concise.

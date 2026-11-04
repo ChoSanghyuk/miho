@@ -9,7 +9,7 @@ projects:
   rootDir: ~/workspace
 telegram:
   botTokenEnv: TELEGRAM_BOT_TOKEN
-  chatId: 0                    # set to your chat ID (see the setup guide)
+  chatId: 7312714018                   # set to your chat ID (see the setup guide)
   notify: [task_done, decision_needed, limit_reached, session_error]
 mcp:
   codex:
