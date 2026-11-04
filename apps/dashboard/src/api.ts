@@ -1,8 +1,10 @@
 import type {
   AnswerDecisionRequest,
   CreateProjectRequest,
+  CreateTaskRequest,
   Decision,
   Guideline,
+  MoveTaskRequest,
   GuidelineRequest,
   Project,
   Role,
@@ -11,6 +13,8 @@ import type {
   Session,
   SessionMessage,
   StartSessionRequest,
+  Task,
+  TasksResponse,
 } from '@orch/shared';
 
 /** The server rejected the owner token (missing or expired cookie). */
@@ -62,6 +66,12 @@ export const api = {
   send: (id: string, text: string) => call<void>('POST', `/api/sessions/${id}/messages`, { text }),
   interrupt: (id: string) => call<void>('POST', `/api/sessions/${id}/interrupt`),
   terminate: (id: string) => call<void>('DELETE', `/api/sessions/${id}`),
+  tasks: () => call<TasksResponse>('GET', '/api/tasks'),
+  createTask: (req: CreateTaskRequest) => call<Task>('POST', '/api/tasks', req),
+  setTaskStatus: (id: string, status: 'wait' | 'run') => call<Task>('PUT', `/api/tasks/${id}/status`, { status }),
+  moveTask: (id: string, req: MoveTaskRequest) => call<void>('PUT', `/api/tasks/${id}/position`, req),
+  deleteTask: (id: string) => call<void>('DELETE', `/api/tasks/${id}`),
+  runGroup: (groupId: string) => call<void>('POST', `/api/task-groups/${groupId}/run`),
   decisions: (status?: Decision['status']) =>
     call<Decision[]>('GET', `/api/decisions${status ? `?status=${status}` : ''}`),
   answer: (id: string, req: AnswerDecisionRequest) => call<Decision>('POST', `/api/decisions/${id}`, req),

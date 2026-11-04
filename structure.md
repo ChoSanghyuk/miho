@@ -53,7 +53,7 @@ ai_orchestrator/
 │  │     ├─ sessions/
 │  │     │  ├─ types.ts       SessionManager / SessionHost interfaces (the AI-integration boundary)
 │  │     │  ├─ agent-sdk.ts   AgentSdkSessionManager: real Claude Code sessions
-│  │     │  └─ fake.ts        FakeSessionManager: echoes prompts; "[decision]" triggers a permission
+│  │     │  └─ fake.ts        FakeSessionManager: echoes prompts; "[decision]" / "[limit]" trigger a permission / usage limit
 │  │     ├─ telegram/index.ts createTelegram(): alerts out, button taps in
 │  │     ├─ app.test.ts       API, lifecycle, auth and WebSocket tests
 │  │     └─ telegram/telegram.test.ts
@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Decisions, Roles, Guidelines, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Tasks (todos, drag-and-drop groups), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
 │     └─ styles.css           CSS variables, light/dark
 ```
@@ -112,6 +112,7 @@ Rules that keep the domains separate:
 | `guidelines` | id, name, description, created_at | shared sections roles compose in. `name` is unique; deleting one a role uses → 409 |
 | `sessions` | id, project_id, role, claude_session_id, status, model, cost_usd, started_at, ended_at | `role` is null for the project root; `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
 | `messages` | seq (autoincrement), id, session_id, role, body_json | console history; ordered by `seq`. Roles: user, assistant, tool, system |
+| `tasks` | id, project_id, role, name, content, parallel, status, group_id, position, session_id, created_at | todo tasks (see "Todo tasks"). A group is the tasks sharing `group_id`, ordered by `position`; no groups table, and a group of one is dissolved |
 | `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options} → answer {choice}. Status pending → answered or expired |
 
 Message `body` shapes: `{text}` (user/assistant), `{tool, input}` (tool call), `{toolUseId, result, isError}` (tool result, truncated to 4000 chars).
@@ -174,6 +175,20 @@ The SDK's `result.total_cost_usd` is a running total for the `query()`. The mana
 
 A `rate_limit_event` with status `rejected`, or a `system/api_retry` with error `rate_limit`, triggers `limitReached` once per turn (`limitReported` flag).
 
+## Todo tasks
+
+Status: `wait` (default) → `run` (owner activated it) → `working` (its session turn is in flight) → `done` | `failed`. The owner can switch `wait` ↔ `run` and `failed` → `run` (retry from the content); `POST /api/task-groups/:id/run` activates a whole group.
+
+`Orchestrator.scheduleTasks()` runs after every task change and every turn end (`done`, `fail`, interrupt, terminate). It starts each `run` task unless:
+- the queue is paused by a usage limit;
+- an earlier member of its group isn't `done` (a failed member blocks the rest);
+- it is non-parallel and another non-parallel task of the same project is `working` (parallel tasks only share `maxConcurrentSessions`);
+- the session it would reuse is busy.
+
+**Which session.** A task's `content` is the prompt. A solo task starts a fresh session. A grouped task continues in the session of the nearest earlier member with the same project and role, and starts fresh if there is none. Groups may mix projects and roles, but parallel tasks can't be grouped, and only `wait` tasks can be moved.
+
+**Limits and restarts.** `limitReached` pauses the queue until `retryAt` (15 min if unknown), in memory only. A task whose turn then fails goes back to `run` and keeps its `sessionId`. When the pause ends, that session gets "Continue where you left off." instead of the content. Restart recovery does the same for `working` tasks. Interrupting or terminating a task's session marks it `failed`.
+
 ## Events (`ServerEvent` in `packages/shared`)
 
 | Event | Emitted when | Consumers |
@@ -185,6 +200,7 @@ A `rate_limit_event` with status `rejected`, or a `system/api_retry` with error 
 | `task_done` | a turn finished successfully (result, costUsd, durationMs) | WS, Telegram, log |
 | `limit_reached` | usage limit hit (retryAt or null) | WS, Telegram, log |
 | `session_error` | turn failed or the SDK stream died | WS, Telegram (with a Resume button), log |
+| `tasks_changed` | any task change, or the task queue paused/resumed | WS (refetch `/api/tasks`) |
 
 Every event goes to every WebSocket client. Telegram sends only the types listed in `telegram.notify`, plus `decision_resolved` edits for prompts it sent.
 
@@ -205,6 +221,10 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 | `GET/POST /api/sessions/:id/messages` | history / send `{text}` (202). Resumes if interrupted, error or terminated |
 | `POST /api/sessions/:id/interrupt` | 204 |
 | `DELETE /api/sessions/:id` | terminate, 204 |
+| `GET/POST /api/tasks` | `{tasks, pausedUntil}` / create `{projectId, role?, name, content, parallel}` |
+| `PUT /api/tasks/:id/status` `{status: wait\|run}` | 409 if working or done |
+| `PUT /api/tasks/:id/position` `{before?, groupId?}` | `before`: into that task's group, in front of it; `groupId`: append; neither: ungroup. 204 |
+| `DELETE /api/tasks/:id`, `POST /api/task-groups/:id/run` | delete (not while working) / activate a group's wait and failed tasks. 204 |
 | `GET /api/decisions?status=` | list (pending, answered, expired) |
 | `POST /api/decisions/:id` | `{answer: {behavior}}` or `{answer: {choice}}` |
 | `GET /ws` | WebSocket stream of `ServerEvent` JSON |
@@ -215,7 +235,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 **Dashboard.**
 - **Login:** `App` first queries `/api/health`. A 401 shows `LoginPage`, which posts the token and gets the cookie.
-- **Routes:** hash routes `#/`, `#/projects/<name>` (URL-encoded project name, resolved from the projects list), `#/sessions/<id>`, `#/decisions`, `#/roles`, `#/guidelines`.
+- **Routes:** hash routes `#/`, `#/projects/<name>` (URL-encoded project name, resolved from the projects list), `#/sessions/<id>`, `#/tasks`, `#/decisions`, `#/roles`, `#/guidelines`.
 - **Create project:** if the server answers 404 (folder missing), the page asks with `confirm()` and retries with `createDir: true`.
 - **Live updates:** `useEvents` opens `/ws`. Browsers send the cookie on the WebSocket handshake, which is why auth uses a cookie rather than a header. Events update the TanStack Query cache directly (`session_output` appends messages, `session_status` updates a session) or invalidate queries (decisions, sessions). After a reconnect, every query is invalidated to catch up.
 - **Dev setup:** in dev, Vite on :5173 proxies `/api` and `/ws` to :4000.
@@ -241,7 +261,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
   - `ORCH_OWNER_TOKEN`: required; the server exits without it.
   - `TELEGRAM_BOT_TOKEN`: Telegram is disabled with a warning if it or `chatId` is missing.
   - `ANTHROPIC_API_KEY`: optional; otherwise the claude.ai login is used.
-- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens.
+- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens. Its prompts `[decision]` and `[limit]` trigger a permission and a usage limit (reset 50 ms later).
 
 ## Operations
 
@@ -258,7 +278,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 ## Testing
 
-- `app.test.ts` drives the real `buildApp` with `FakeSessionManager` and a temporary SQLite file. It covers the lifecycle, decisions, interrupt, restart recovery, resume, WebSocket, auth and 4xx handling.
+- `app.test.ts` drives the real `buildApp` with `FakeSessionManager` and a temporary SQLite file. It covers the lifecycle, decisions, interrupt, restart recovery, resume, todo tasks (ordering, session reuse, per-project serialization, limit pause), WebSocket, auth and 4xx handling.
 - `telegram.test.ts` replaces outgoing Bot API calls via `bot.api.config.use` and feeds updates with `bot.handleUpdate`.
 - Real-Claude checks are manual. Use a cheap model and an isolated copy (for example a git worktree with its own `ORCH_CONFIG`), because `dbPath` is always `<repoRoot>/orchestrator.sqlite`.
 

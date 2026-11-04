@@ -7,6 +7,7 @@ import type {
   AnswerDecisionRequest,
   AnsweredVia,
   CreateProjectRequest,
+  CreateTaskRequest,
   Decision,
   Guideline,
   GuidelineRequest,
@@ -19,10 +20,12 @@ import type {
   SessionMessage,
   SessionStatus,
   StartSessionRequest,
+  Task,
+  TasksResponse,
 } from '@orch/shared';
 import type { Config } from './config.js';
 import type { Db } from './db/index.js';
-import { decisions, guidelines, messages, projects, roles, sessions } from './db/schema.js';
+import { decisions, guidelines, messages, projects, roles, sessions, tasks } from './db/schema.js';
 import { EventBus } from './events.js';
 import type { SessionHost, SessionManager, SessionManagerFactory } from './sessions/types.js';
 
@@ -39,6 +42,11 @@ type DecisionAnswer = NonNullable<Decision['answer']>;
 type Waiter = { sessionId: string; resolve: (a: DecisionAnswer) => void; reject: (e: Error) => void };
 
 const now = () => new Date().toISOString();
+
+/** How long the task queue pauses after a usage limit with no known reset time. */
+const LIMIT_FALLBACK_MS = 15 * 60_000;
+const CONTINUE_PROMPT = 'Continue where you left off.';
+const BUSY: SessionStatus[] = ['queued', 'running', 'waiting_decision'];
 
 /** A role session runs in its role folder, so Claude Code loads that role's CLAUDE.md. */
 const sessionCwd = (project: Project, role: string | null) => (role ? path.join(project.workdir, role) : project.workdir);
@@ -79,6 +87,11 @@ export class Orchestrator implements SessionHost {
   readonly bus = new EventBus();
   private manager: SessionManager;
   private waiters = new Map<string, Waiter>();
+  /** Set while a usage limit pauses the task queue (memory only). */
+  private pausedUntil: string | null = null;
+  private pauseTimer: ReturnType<typeof setTimeout> | undefined;
+  private scheduling = false;
+  private rescheduled = false;
 
   constructor(
     private db: Db,
@@ -87,6 +100,7 @@ export class Orchestrator implements SessionHost {
   ) {
     this.manager = managerFactory(this);
     this.recoverAfterRestart();
+    this.scheduleTasks();
   }
 
   // ---- Projects ----
@@ -258,6 +272,7 @@ export class Orchestrator implements SessionHost {
     this.manager.interrupt(sessionId);
     this.expireDecisions(sessionId);
     this.setStatus(sessionId, 'idle');
+    this.finishTask(sessionId, 'failed');
   }
 
   terminate(sessionId: string): void {
@@ -267,16 +282,103 @@ export class Orchestrator implements SessionHost {
     this.expireDecisions(sessionId);
     this.db.update(sessions).set({ endedAt: now() }).where(eq(sessions.id, sessionId)).run();
     this.setStatus(sessionId, 'terminated');
+    this.finishTask(sessionId, 'failed');
   }
 
   /** Stops every live Claude process. Statuses are left as-is; the next startup marks them interrupted. */
   shutdown(): void {
+    clearTimeout(this.pauseTimer);
     const live = this.db
       .select({ id: sessions.id })
       .from(sessions)
       .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision', 'idle']))
       .all();
     for (const { id } of live) this.manager.stop(id);
+  }
+
+  // ---- Tasks (todo queue run by scheduleTasks) ----
+
+  listTasks(): TasksResponse {
+    const all = this.db.select().from(tasks).orderBy(asc(tasks.createdAt)).all();
+    return { tasks: all, pausedUntil: this.pausedUntil };
+  }
+
+  createTask(req: CreateTaskRequest): Task {
+    const project = this.getProject(req.projectId);
+    if (req.role && !project.roles.includes(req.role)) throw new HttpError(400, `project has no role "${req.role}"`);
+    const task: Task = {
+      id: randomUUID(),
+      projectId: project.id,
+      role: req.role ?? null,
+      name: req.name,
+      content: req.content,
+      parallel: req.parallel,
+      status: 'wait',
+      groupId: null,
+      position: 0,
+      sessionId: null,
+      createdAt: now(),
+    };
+    this.db.insert(tasks).values(task).run();
+    this.bus.emit({ type: 'tasks_changed' });
+    return task;
+  }
+
+  deleteTask(id: string): void {
+    const task = this.getTask(id);
+    if (task.status === 'working') throw new HttpError(409, 'Task is working; interrupt its session first');
+    this.db.delete(tasks).where(eq(tasks.id, id)).run();
+    if (task.groupId) this.writeGroup(task.groupId, this.groupMembers(task.groupId).map((t) => t.id));
+    this.tasksChanged();
+  }
+
+  /** wait <-> run; failed -> run retries from the content in a fresh (or the group's) session. */
+  setTaskStatus(id: string, status: 'wait' | 'run'): Task {
+    const task = this.getTask(id);
+    if (task.status === 'working' || task.status === 'done') throw new HttpError(409, `Task is ${task.status}`);
+    const sessionId = task.status === 'failed' ? null : task.sessionId;
+    this.db.update(tasks).set({ status, sessionId }).where(eq(tasks.id, id)).run();
+    this.tasksChanged();
+    return { ...task, status, sessionId };
+  }
+
+  runGroup(groupId: string): void {
+    const members = this.groupMembers(groupId);
+    if (!members.length) throw new HttpError(404, 'Group not found');
+    for (const t of members) {
+      if (t.status === 'wait') this.db.update(tasks).set({ status: 'run' }).where(eq(tasks.id, t.id)).run();
+      if (t.status === 'failed') this.db.update(tasks).set({ status: 'run', sessionId: null }).where(eq(tasks.id, t.id)).run();
+    }
+    this.tasksChanged();
+  }
+
+  /** `before`: join that task's group in front of it. `groupId`: append. Neither: ungroup. */
+  moveTask(id: string, req: { before?: string; groupId?: string }): void {
+    const task = this.getTask(id);
+    if (task.parallel) throw new HttpError(400, 'Parallel tasks cannot be grouped');
+    if (task.status !== 'wait') throw new HttpError(409, `Only waiting tasks can be moved; task is ${task.status}`);
+    if (req.before === id) return;
+
+    let target: { groupId: string; ids: string[] } | null = null;
+    if (req.before) {
+      const before = this.getTask(req.before);
+      if (before.parallel) throw new HttpError(400, 'Parallel tasks cannot be grouped');
+      const groupId = before.groupId ?? randomUUID();
+      const ids = before.groupId ? this.groupMembers(groupId).map((t) => t.id).filter((x) => x !== id) : [before.id];
+      ids.splice(ids.indexOf(before.id), 0, id);
+      target = { groupId, ids };
+    } else if (req.groupId) {
+      const ids = this.groupMembers(req.groupId).map((t) => t.id).filter((x) => x !== id);
+      if (!ids.length) throw new HttpError(404, 'Group not found');
+      target = { groupId: req.groupId, ids: [...ids, id] };
+    }
+
+    if (task.groupId && task.groupId !== target?.groupId) {
+      this.writeGroup(task.groupId, this.groupMembers(task.groupId).map((t) => t.id).filter((x) => x !== id));
+    }
+    if (target) this.writeGroup(target.groupId, target.ids);
+    else this.db.update(tasks).set({ groupId: null, position: 0 }).where(eq(tasks.id, id)).run();
+    this.tasksChanged();
   }
 
   // ---- Decisions ----
@@ -344,23 +446,129 @@ export class Orchestrator implements SessionHost {
     this.db.update(sessions).set({ costUsd: session.costUsd + r.costUsd }).where(eq(sessions.id, sessionId)).run();
     this.setStatus(sessionId, 'idle');
     this.bus.emit({ type: 'task_done', sessionId, projectId: session.projectId, ...r });
+    this.finishTask(sessionId, 'done');
   }
 
   setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
     this.db.update(sessions).set({ claudeSessionId }).where(eq(sessions.id, sessionId)).run();
   }
 
+  /** The limit is account-wide, so any session hitting it pauses the task queue until the reset. */
   limitReached(sessionId: string, retryAt: string | null): void {
     this.bus.emit({ type: 'limit_reached', sessionId, retryAt });
+    const until = retryAt ?? new Date(Date.now() + LIMIT_FALLBACK_MS).toISOString();
+    if (this.pausedUntil && this.pausedUntil >= until) return;
+    this.pausedUntil = until;
+    clearTimeout(this.pauseTimer);
+    this.pauseTimer = setTimeout(() => {
+      this.pausedUntil = null;
+      this.tasksChanged();
+    }, Math.max(0, Date.parse(until) - Date.now()));
+    this.bus.emit({ type: 'tasks_changed' });
   }
 
   fail(sessionId: string, error: string): void {
     this.expireDecisions(sessionId);
     this.setStatus(sessionId, 'error');
     this.bus.emit({ type: 'session_error', sessionId, error });
+    // A turn cut off by a usage limit goes back to `run` and continues in the same session after the reset.
+    this.finishTask(sessionId, this.pausedUntil ? 'run' : 'failed');
   }
 
   // ---- internals ----
+
+  private getTask(id: string): Task {
+    const task = this.db.select().from(tasks).where(eq(tasks.id, id)).get();
+    if (!task) throw new HttpError(404, 'Task not found');
+    return task;
+  }
+
+  private groupMembers(groupId: string): Task[] {
+    return this.db.select().from(tasks).where(eq(tasks.groupId, groupId)).orderBy(asc(tasks.position)).all();
+  }
+
+  /** Stores the group's order as positions 0..n-1; a group of one is dissolved. */
+  private writeGroup(groupId: string, ids: string[]): void {
+    ids.forEach((id, position) => {
+      this.db.update(tasks).set({ groupId: ids.length > 1 ? groupId : null, position }).where(eq(tasks.id, id)).run();
+    });
+  }
+
+  private tasksChanged(): void {
+    this.bus.emit({ type: 'tasks_changed' });
+    this.scheduleTasks();
+  }
+
+  /** Called when a session's turn ends: its working task (if any) moves to `status`. */
+  private finishTask(sessionId: string, status: 'done' | 'failed' | 'run'): void {
+    const task = this.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, 'working')))
+      .get();
+    if (task) {
+      this.db.update(tasks).set({ status }).where(eq(tasks.id, task.id)).run();
+      this.bus.emit({ type: 'tasks_changed' });
+    }
+    this.scheduleTasks();
+  }
+
+  /**
+   * Starts every `run` task that may go now: not paused, earlier group members done,
+   * no other non-parallel task working in the same project, and the session to reuse not busy.
+   */
+  private scheduleTasks(): void {
+    // Starting a task can end a turn synchronously, which schedules again: rerun the loop instead of nesting.
+    if (this.scheduling) {
+      this.rescheduled = true;
+      return;
+    }
+    this.scheduling = true;
+    try {
+      do {
+        this.rescheduled = false;
+        this.scheduleOnce();
+      } while (this.rescheduled);
+    } finally {
+      this.scheduling = false;
+    }
+  }
+
+  private scheduleOnce(): void {
+    if (this.pausedUntil) return;
+    const all = this.db.select().from(tasks).orderBy(asc(tasks.createdAt)).all();
+    const busyProjects = new Set(all.filter((t) => t.status === 'working' && !t.parallel).map((t) => t.projectId));
+    for (const task of all) {
+      if (task.status !== 'run') continue;
+      const earlier = task.groupId ? all.filter((t) => t.groupId === task.groupId && t.position < task.position) : [];
+      if (earlier.some((t) => t.status !== 'done')) continue;
+      if (!task.parallel && busyProjects.has(task.projectId)) continue;
+      // Own session: cut off by a limit or restart. Otherwise the nearest earlier group member with the same project+role.
+      const reuse =
+        task.sessionId ??
+        earlier.filter((t) => t.projectId === task.projectId && t.role === task.role && t.sessionId).at(-1)?.sessionId ??
+        null;
+      if (reuse && BUSY.includes(this.getSession(reuse).status)) continue;
+      if (!task.parallel) busyProjects.add(task.projectId);
+      this.startTask(task, reuse);
+    }
+  }
+
+  private startTask(task: Task, reuse: string | null): void {
+    try {
+      if (reuse) {
+        this.db.update(tasks).set({ status: 'working', sessionId: reuse }).where(eq(tasks.id, task.id)).run();
+        this.sendMessage(reuse, task.sessionId ? CONTINUE_PROMPT : task.content);
+      } else {
+        this.db.update(tasks).set({ status: 'working' }).where(eq(tasks.id, task.id)).run();
+        const session = this.startSession(task.projectId, { prompt: task.content, role: task.role ?? undefined });
+        this.db.update(tasks).set({ sessionId: session.id }).where(eq(tasks.id, task.id)).run();
+      }
+    } catch {
+      this.db.update(tasks).set({ status: 'failed' }).where(eq(tasks.id, task.id)).run();
+    }
+    this.bus.emit({ type: 'tasks_changed' });
+  }
 
   getProject(id: string): Project {
     const project = this.db.select().from(projects).where(eq(projects.id, id)).get();
@@ -444,6 +652,8 @@ export class Orchestrator implements SessionHost {
       .where(inArray(sessions.status, ['queued', 'running', 'waiting_decision', 'idle']))
       .run();
     this.db.update(decisions).set({ status: 'expired' }).where(eq(decisions.status, 'pending')).run();
+    // Working tasks keep their session and continue in it on the next schedule.
+    this.db.update(tasks).set({ status: 'run' }).where(eq(tasks.status, 'working')).run();
   }
 }
 

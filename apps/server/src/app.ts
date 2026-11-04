@@ -28,6 +28,15 @@ const sendMessageBody = z.object({ text: z.string().min(1) });
 const answerDecisionBody = z.object({
   answer: z.union([z.object({ behavior: z.enum(['allow', 'deny']) }), z.object({ choice: z.string() })]),
 });
+const createTaskBody = z.object({
+  projectId: z.string().min(1),
+  role: z.string().min(1).optional(),
+  name: z.string().min(1),
+  content: z.string().min(1),
+  parallel: z.boolean(),
+});
+const taskStatusBody = z.object({ status: z.enum(['wait', 'run']) });
+const moveTaskBody = z.object({ before: z.string().min(1).optional(), groupId: z.string().min(1).optional() });
 const decisionsQuery = z.object({ status: z.enum(['pending', 'answered', 'expired']).optional() });
 const idParams = z.object({ id: z.string() });
 
@@ -115,6 +124,27 @@ export async function buildApp(opts: {
   });
   app.delete('/api/sessions/:id', async (req, reply) => {
     orch.terminate(idParams.parse(req.params).id);
+    return reply.status(204).send();
+  });
+
+  app.get('/api/tasks', async () => orch.listTasks());
+  app.post('/api/tasks', async (req, reply) => {
+    reply.status(201);
+    return orch.createTask(createTaskBody.parse(req.body));
+  });
+  app.put('/api/tasks/:id/status', async (req) =>
+    orch.setTaskStatus(idParams.parse(req.params).id, taskStatusBody.parse(req.body).status),
+  );
+  app.put('/api/tasks/:id/position', async (req, reply) => {
+    orch.moveTask(idParams.parse(req.params).id, moveTaskBody.parse(req.body));
+    return reply.status(204).send();
+  });
+  app.delete('/api/tasks/:id', async (req, reply) => {
+    orch.deleteTask(idParams.parse(req.params).id);
+    return reply.status(204).send();
+  });
+  app.post('/api/task-groups/:id/run', async (req, reply) => {
+    orch.runGroup(idParams.parse(req.params).id);
     return reply.status(204).send();
   });
 

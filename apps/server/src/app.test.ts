@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import type { Decision, Guideline, Project, Role, ServerEvent, Session, SessionMessage } from '@orch/shared';
+import type { Decision, Guideline, Project, Role, ServerEvent, Session, SessionMessage, Task, TasksResponse } from '@orch/shared';
 import { buildApp } from './app.js';
 import type { Config } from './config.js';
 import type { SessionManagerFactory } from './sessions/types.js';
@@ -349,6 +349,190 @@ describe('roles', () => {
     await t.startSession(project.id, 'root');
     assert.deepEqual(workdirs, [path.join(root, 'crew', 'qa'), path.join(root, 'crew')]);
     await t.app.close();
+  });
+});
+
+describe('tasks', () => {
+  async function tasksSetup(dbFile?: string) {
+    const t = await setup(dbFile);
+    const createTask = async (projectId: string, name: string, extra: { parallel?: boolean; role?: string; content?: string } = {}) =>
+      (
+        await t.req<Task>('POST', '/api/tasks', {
+          projectId,
+          name,
+          content: extra.content ?? name,
+          parallel: extra.parallel ?? false,
+          ...(extra.role ? { role: extra.role } : {}),
+        })
+      ).body;
+    const list = async () => (await t.req<TasksResponse>('GET', '/api/tasks')).body;
+    const task = async (id: string) => (await list()).tasks.find((x) => x.id === id)!;
+    const run = (id: string) => t.req('PUT', `/api/tasks/${id}/status`, { status: 'run' });
+    /** Polls until the task reaches the status. */
+    const waitTask = async (id: string, status: Task['status']) => {
+      for (let i = 0; i < 200; i++) {
+        const x = await task(id);
+        if (x.status === status) return x;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error(`Timed out waiting for task ${status}; is ${(await task(id)).status}`);
+    };
+    return { ...t, createTask, list, task, run, waitTask };
+  }
+
+  test('a task waits until switched to run, then runs in a fresh session', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const a = await t.createTask(project.id, 'first', { content: 'do it' });
+    assert.equal(a.status, 'wait');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal((await t.task(a.id)).status, 'wait');
+
+    assert.equal((await t.run(a.id)).status, 200);
+    const done = await t.waitTask(a.id, 'done');
+    assert.ok(done.sessionId);
+    const history = (await t.req<SessionMessage[]>('GET', `/api/sessions/${done.sessionId}/messages`)).body;
+    assert.equal((history[0]!.body as { text: string }).text, 'do it');
+    assert.equal((await t.run(a.id)).status, 409); // done can't be changed
+    await t.app.close();
+  });
+
+  test('grouped tasks run in order and share the session of the same project+role', async () => {
+    const t = await tasksSetup();
+    const alpha = await t.createProject('alpha');
+    const beta = await t.createProject('beta');
+    const a = await t.createTask(alpha.id, 'a');
+    const b = await t.createTask(alpha.id, 'b');
+    const c = await t.createTask(beta.id, 'c');
+    // drop a on b → [a, b]; then append c to the group
+    assert.equal((await t.req('PUT', `/api/tasks/${a.id}/position`, { before: b.id })).status, 204);
+    const groupId = (await t.task(a.id)).groupId!;
+    assert.equal((await t.req('PUT', `/api/tasks/${c.id}/position`, { groupId })).status, 204);
+    assert.deepEqual(
+      (await t.list()).tasks.filter((x) => x.groupId === groupId).sort((x, y) => x.position - y.position).map((x) => x.name),
+      ['a', 'b', 'c'],
+    );
+
+    // Run b and c first: they must wait for a.
+    await t.run(c.id);
+    await t.run(b.id);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal((await t.task(b.id)).status, 'run');
+    assert.equal((await t.task(c.id)).status, 'run');
+
+    await t.run(a.id);
+    const doneC = await t.waitTask(c.id, 'done');
+    const doneA = await t.task(a.id);
+    const doneB = await t.task(b.id);
+    assert.equal(doneA.status, 'done');
+    assert.equal(doneB.sessionId, doneA.sessionId);
+    assert.notEqual(doneC.sessionId, doneA.sessionId);
+    const history = (await t.req<SessionMessage[]>('GET', `/api/sessions/${doneA.sessionId}/messages`)).body;
+    assert.deepEqual(
+      history.filter((m) => m.role === 'user').map((m) => (m.body as { text: string }).text),
+      ['a', 'b'],
+    );
+
+    // Done tasks can't be moved or switched back.
+    assert.equal((await t.req('PUT', `/api/tasks/${c.id}/position`, {})).status, 409);
+    assert.equal((await t.req('PUT', `/api/tasks/${a.id}/status`, { status: 'wait' })).status, 409);
+    await t.app.close();
+  });
+
+  test('group run activates all members; ungrouping the last but one dissolves the group', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const a = await t.createTask(project.id, 'a');
+    const b = await t.createTask(project.id, 'b');
+    await t.req('PUT', `/api/tasks/${b.id}/position`, { before: a.id });
+    await t.req('PUT', `/api/tasks/${a.id}/position`, {});
+    assert.equal((await t.task(b.id)).groupId, null);
+
+    await t.req('PUT', `/api/tasks/${b.id}/position`, { before: a.id });
+    const groupId = (await t.task(a.id)).groupId!;
+    assert.equal((await t.req('POST', `/api/task-groups/${groupId}/run`)).status, 204);
+    await t.waitTask(a.id, 'done');
+    assert.equal((await t.task(b.id)).status, 'done');
+    assert.equal((await t.req('POST', '/api/task-groups/nope/run')).status, 404);
+    await t.app.close();
+  });
+
+  test('parallel tasks cannot be grouped', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const p = await t.createTask(project.id, 'p', { parallel: true });
+    const s = await t.createTask(project.id, 's');
+    assert.equal((await t.req('PUT', `/api/tasks/${p.id}/position`, { before: s.id })).status, 400);
+    assert.equal((await t.req('PUT', `/api/tasks/${s.id}/position`, { before: p.id })).status, 400);
+    await t.app.close();
+  });
+
+  test('non-parallel tasks run one at a time per project; parallel ones alongside', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const first = await t.createTask(project.id, 'first', { content: '[decision] first' });
+    const second = await t.createTask(project.id, 'second');
+    const par = await t.createTask(project.id, 'par', { parallel: true });
+    await t.run(first.id);
+    await t.waitFor((e) => e.type === 'decision_needed');
+    await t.run(second.id);
+    await t.run(par.id);
+    await t.waitTask(par.id, 'done');
+    assert.equal((await t.task(second.id)).status, 'run');
+
+    const [decision] = (await t.req<Decision[]>('GET', '/api/decisions?status=pending')).body;
+    await t.req('POST', `/api/decisions/${decision!.id}`, { answer: { behavior: 'allow' } });
+    await t.waitTask(second.id, 'done');
+    await t.app.close();
+  });
+
+  test('a usage limit pauses the queue and the task continues after the reset', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const a = await t.createTask(project.id, 'a', { content: '[limit]' });
+    await t.run(a.id);
+    await t.waitFor((e) => e.type === 'limit_reached');
+    const paused = await t.list();
+    assert.ok(paused.pausedUntil);
+    assert.equal(paused.tasks[0]!.status, 'run');
+
+    const done = await t.waitTask(a.id, 'done');
+    assert.equal((await t.list()).pausedUntil, null);
+    const history = (await t.req<SessionMessage[]>('GET', `/api/sessions/${done.sessionId}/messages`)).body;
+    assert.equal((history.filter((m) => m.role === 'user').at(-1)!.body as { text: string }).text, 'Continue where you left off.');
+    await t.app.close();
+  });
+
+  test('interrupting a working task fails it; retry runs it again', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const a = await t.createTask(project.id, 'a', { content: '[decision]' });
+    await t.run(a.id);
+    await t.waitFor((e) => e.type === 'decision_needed');
+    const { sessionId } = await t.task(a.id);
+    assert.equal((await t.req('DELETE', `/api/tasks/${a.id}`)).status, 409);
+    await t.req('POST', `/api/sessions/${sessionId}/interrupt`);
+    assert.equal((await t.task(a.id)).status, 'failed');
+
+    await t.run(a.id);
+    const retried = await t.waitTask(a.id, 'working');
+    assert.notEqual(retried.sessionId, sessionId);
+    await t.app.close();
+  });
+
+  test('working tasks continue after a restart', async () => {
+    const first = await tasksSetup('tasks-restart.sqlite');
+    const project = await first.createProject('alpha');
+    const a = await first.createTask(project.id, 'a', { content: '[decision]' });
+    await first.run(a.id);
+    await first.waitFor((e) => e.type === 'decision_needed');
+    const { sessionId } = await first.task(a.id);
+    await first.app.close();
+
+    const second = await tasksSetup('tasks-restart.sqlite');
+    const done = await second.waitTask(a.id, 'done');
+    assert.equal(done.sessionId, sessionId);
+    await second.app.close();
   });
 });
 

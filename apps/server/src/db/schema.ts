@@ -1,5 +1,5 @@
 import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import type { AnsweredVia, Decision, MessageRole, SessionStatus } from '@orch/shared';
+import type { AnsweredVia, Decision, MessageRole, SessionStatus, TaskStatus } from '@orch/shared';
 
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -61,5 +61,21 @@ export const decisions = sqliteTable('decisions', {
   status: text('status').$type<Decision['status']>().notNull(),
   answeredVia: text('answered_via').$type<AnsweredVia>(),
   answer: text('answer_json', { mode: 'json' }).$type<NonNullable<Decision['answer']>>(),
+  createdAt: text('created_at').notNull(),
+});
+
+export const tasks = sqliteTable('tasks', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => projects.id),
+  role: text('role'),
+  name: text('name').notNull(),
+  content: text('content').notNull(),
+  parallel: integer('parallel', { mode: 'boolean' }).notNull(),
+  status: text('status').$type<TaskStatus>().notNull(),
+  groupId: text('group_id'),
+  position: integer('position').notNull().default(0),
+  sessionId: text('session_id'),
   createdAt: text('created_at').notNull(),
 });

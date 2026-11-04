@@ -88,6 +88,27 @@ export type Decision = {
     }
 );
 
+export type TaskStatus = 'wait' | 'run' | 'working' | 'done' | 'failed';
+
+/** A todo task. `wait` until the owner switches it to `run`; the orchestrator then runs it in a session. */
+export interface Task {
+  id: string;
+  projectId: string;
+  role: string | null;
+  name: string;
+  /** Sent as the prompt. */
+  content: string;
+  /** May run alongside other tasks of the same project; can't be grouped. */
+  parallel: boolean;
+  status: TaskStatus;
+  /** Tasks sharing a groupId run in `position` order. */
+  groupId: string | null;
+  position: number;
+  /** Session the task ran (or is running) in. */
+  sessionId: string | null;
+  createdAt: string;
+}
+
 // REST request bodies
 
 export interface CreateProjectRequest {
@@ -126,6 +147,30 @@ export interface AnswerDecisionRequest {
   answer: { behavior: 'allow' | 'deny' } | { choice: string };
 }
 
+export interface CreateTaskRequest {
+  projectId: string;
+  role?: string;
+  name: string;
+  content: string;
+  parallel: boolean;
+}
+
+export interface SetTaskStatusRequest {
+  status: 'wait' | 'run';
+}
+
+/** `before`: join that task's group in front of it. `groupId`: append to that group. Neither: ungroup. */
+export interface MoveTaskRequest {
+  before?: string;
+  groupId?: string;
+}
+
+export interface TasksResponse {
+  tasks: Task[];
+  /** Set while a usage limit pauses the task queue. */
+  pausedUntil: string | null;
+}
+
 // Events pushed over /ws and consumed by the Telegram module
 
 export type ServerEvent =
@@ -143,6 +188,8 @@ export type ServerEvent =
       durationMs: number;
     }
   | { type: 'limit_reached'; sessionId: string; retryAt: string | null }
-  | { type: 'session_error'; sessionId: string; error: string };
+  | { type: 'session_error'; sessionId: string; error: string }
+  // any task change, or the task queue paused/resumed: refetch GET /api/tasks
+  | { type: 'tasks_changed' };
 
 export type ServerEventType = ServerEvent['type'];

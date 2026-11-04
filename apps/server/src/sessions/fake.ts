@@ -3,6 +3,7 @@ import type { SessionHost, SessionManager } from './types.js';
 /**
  * Stand-in until the Agent SDK integration lands. Echoes each prompt.
  * A prompt containing "[decision]" first asks for a Bash permission, to exercise the decision flow.
+ * A prompt containing "[limit]" hits a usage limit that resets 50 ms later.
  */
 export class FakeSessionManager implements SessionManager {
   private turns = new Map<string, AbortController>();
@@ -47,6 +48,12 @@ export class FakeSessionManager implements SessionManager {
         return; // cancelled by interrupt or terminate
       }
       if (signal.aborted) return;
+    }
+
+    if (text.includes('[limit]')) {
+      this.turns.delete(sessionId);
+      this.host.limitReached(sessionId, new Date(Date.now() + 50).toISOString());
+      return this.host.fail(sessionId, 'usage limit');
     }
 
     const result = `Echo: ${text}${suffix}`;

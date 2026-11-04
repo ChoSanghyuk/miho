@@ -44,6 +44,9 @@ export function useEvents(): boolean {
         case 'decision_resolved':
           void qc.invalidateQueries({ queryKey: ['decisions'] });
           return;
+        case 'tasks_changed':
+          void qc.invalidateQueries({ queryKey: ['tasks'] });
+          return;
         case 'task_done':
           void qc.invalidateQueries({ queryKey: ['session', e.sessionId] });
           return;
