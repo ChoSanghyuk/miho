@@ -13,6 +13,7 @@ import type {
   MessageRole,
   Project,
   Role,
+  RoleInput,
   RoleRequest,
   Session,
   SessionMessage,
@@ -62,6 +63,17 @@ function assertRoleName(name: string): void {
   }
 }
 
+/** Creates <workdir>/<role>/CLAUDE.md; an existing CLAUDE.md is kept. */
+function writeRoleFolder(workdir: string, role: RoleInput): void {
+  const dir = path.join(workdir, role.name);
+  mkdirSync(dir, { recursive: true });
+  try {
+    writeFileSync(path.join(dir, 'CLAUDE.md'), `# Role: ${role.name}\n\n${role.description}\n`, { flag: 'wx' });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+}
+
 /** Owns all state. The API and Telegram call it; the session manager reports back through SessionHost. */
 export class Orchestrator implements SessionHost {
   readonly bus = new EventBus();
@@ -99,18 +111,20 @@ export class Orchestrator implements SessionHost {
     } else if (!statSync(workdir).isDirectory()) {
       throw new HttpError(400, `workdir is not a directory: ${workdir}`);
     }
-    for (const r of projectRoles) {
-      const dir = path.join(workdir, r.name);
-      mkdirSync(dir, { recursive: true });
-      try {
-        writeFileSync(path.join(dir, 'CLAUDE.md'), `# Role: ${r.name}\n\n${r.description}\n`, { flag: 'wx' });
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; // keep an existing CLAUDE.md
-      }
-    }
+    for (const r of projectRoles) writeRoleFolder(workdir, r);
     const project: Project = { id: randomUUID(), name: req.name, workdir, roles: names, createdAt: now() };
     this.db.insert(projects).values(project).run();
     return project;
+  }
+
+  addProjectRole(projectId: string, role: RoleInput): Project {
+    const project = this.getProject(projectId);
+    assertRoleName(role.name);
+    if (project.roles.includes(role.name)) throw new HttpError(409, `project already has role "${role.name}"`);
+    writeRoleFolder(project.workdir, role);
+    const updated = { ...project, roles: [...project.roles, role.name] };
+    this.db.update(projects).set({ roles: updated.roles }).where(eq(projects.id, projectId)).run();
+    return updated;
   }
 
   listProjects(): Project[] {

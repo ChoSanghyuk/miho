@@ -301,6 +301,28 @@ describe('roles', () => {
     await t.app.close();
   });
 
+  test('roles can be added to an existing project', async () => {
+    const t = await setup();
+    const project = (await t.req<Project>('POST', '/api/projects', { name: 'later', workdir: 'later', createDir: true })).body;
+    assert.deepEqual(project.roles, []);
+    const res = await t.req<Project>('POST', `/api/projects/${project.id}/roles`, { name: 'qa', description: 'Tests.' });
+    assert.equal(res.status, 201);
+    assert.deepEqual(res.body.roles, ['qa']);
+    assert.equal(readFileSync(path.join(root, 'later', 'qa', 'CLAUDE.md'), 'utf8'), '# Role: qa\n\nTests.\n');
+    assert.equal((await t.req('POST', `/api/projects/${project.id}/roles`, { name: 'qa', description: '' })).status, 409);
+    assert.equal((await t.req('POST', `/api/projects/${project.id}/roles`, { name: '../x', description: '' })).status, 400);
+    assert.equal((await t.req('POST', '/api/projects/nope/roles', { name: 'dev', description: '' })).status, 404);
+    mkdirSync(path.join(root, 'later', 'dev'));
+    writeFileSync(path.join(root, 'later', 'dev', 'CLAUDE.md'), 'mine');
+    const two = await t.req<Project>('POST', `/api/projects/${project.id}/roles`, { name: 'dev', description: 'Codes.' });
+    assert.deepEqual(two.body.roles, ['qa', 'dev']);
+    assert.equal(readFileSync(path.join(root, 'later', 'dev', 'CLAUDE.md'), 'utf8'), 'mine');
+    assert.deepEqual((await t.req<Project[]>('GET', '/api/projects')).body.find((p) => p.id === project.id)?.roles, ['qa', 'dev']);
+    const s = await t.req<Session>('POST', `/api/projects/${project.id}/sessions`, { prompt: 'hi', role: 'qa' });
+    assert.equal(s.status, 201);
+    await t.app.close();
+  });
+
   test('a role session runs in the role folder', async () => {
     const workdirs: string[] = [];
     const t = await setup(undefined, (host) => {

@@ -1,9 +1,11 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import type { RoleInput } from '@orch/shared';
 import { api } from '../api';
 import { StatusPill } from '../components/StatusPill';
 
 export function ProjectPage({ projectName }: { projectName: string }) {
+  const qc = useQueryClient();
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const project = projects.data?.find((p) => p.name === projectName);
   const projectId = project?.id ?? '';
@@ -18,6 +20,20 @@ export function ProjectPage({ projectName }: { projectName: string }) {
     mutationFn: () => api.startSession(projectId, { prompt, role: role || undefined }),
     onSuccess: (s) => (location.hash = `#/sessions/${s.id}`),
   });
+  const roles = useQuery({ queryKey: ['roles'], queryFn: api.roles });
+  const available = roles.data?.filter((r) => !project?.roles.includes(r.name)) ?? [];
+  const [predefined, setPredefined] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const addRole = useMutation({
+    mutationFn: (role: RoleInput) => api.addProjectRole(projectId, role),
+    onSuccess: () => {
+      setPredefined('');
+      setNewName('');
+      setNewDesc('');
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
 
   return (
     <>
@@ -27,6 +43,50 @@ export function ProjectPage({ projectName }: { projectName: string }) {
       <h1>{projectName}</h1>
       {projects.data && !project && <p className="error">No project named "{projectName}".</p>}
       <p className="muted mono">{project?.workdir}</p>
+
+      {project && (
+        <div className="card">
+          <p>
+            <strong>Roles:</strong>{' '}
+            {project.roles.length ? project.roles.join(', ') : <span className="muted">none (single session)</span>}
+          </p>
+          <div className="form-row">
+            <select value={predefined} onChange={(e) => setPredefined(e.target.value)} aria-label="Predefined role">
+              <option value="">Predefined role…</option>
+              {available.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!predefined || addRole.isPending}
+              onClick={() => {
+                // A predefined role sends its composed content (own text + guidelines) as the CLAUDE.md body.
+                const r = available.find((x) => x.id === predefined);
+                if (r) addRole.mutate({ name: r.name, description: r.content });
+              }}
+            >
+              Add role
+            </button>
+          </div>
+          <div className="form-row" style={{ marginTop: 8 }}>
+            <input placeholder="Role for this project only" value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <input placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+            <button
+              type="button"
+              className="secondary"
+              disabled={!newName.trim() || addRole.isPending}
+              onClick={() => addRole.mutate({ name: newName.trim(), description: newDesc })}
+            >
+              Add role
+            </button>
+          </div>
+          {addRole.error && <p className="error">{addRole.error.message}</p>}
+        </div>
+      )}
 
       <form
         className="card"

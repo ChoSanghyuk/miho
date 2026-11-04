@@ -69,6 +69,11 @@ export async function buildApp(opts: {
     return orch.createProject(createProjectBody.parse(req.body));
   });
   app.get('/api/projects', async () => orch.listProjects());
+  app.post('/api/projects/:id/roles', async (req, reply) => {
+    const project = orch.addProjectRole(idParams.parse(req.params).id, roleBody.parse(req.body));
+    reply.status(201);
+    return project;
+  });
 
   app.get('/api/roles', async () => orch.listRoles());
   app.post('/api/roles', async (req, reply) => {
