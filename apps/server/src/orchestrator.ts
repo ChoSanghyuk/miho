@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { and, asc, eq, inArray } from 'drizzle-orm';
@@ -10,6 +10,8 @@ import type {
   Decision,
   MessageRole,
   Project,
+  Role,
+  RoleInput,
   Session,
   SessionMessage,
   SessionStatus,
@@ -17,7 +19,7 @@ import type {
 } from '@orch/shared';
 import type { Config } from './config.js';
 import type { Db } from './db/index.js';
-import { decisions, messages, projects, sessions } from './db/schema.js';
+import { decisions, messages, projects, roles, sessions } from './db/schema.js';
 import { EventBus } from './events.js';
 import type { SessionHost, SessionManager, SessionManagerFactory } from './sessions/types.js';
 
@@ -34,6 +36,16 @@ type DecisionAnswer = NonNullable<Decision['answer']>;
 type Waiter = { sessionId: string; resolve: (a: DecisionAnswer) => void; reject: (e: Error) => void };
 
 const now = () => new Date().toISOString();
+
+/** A role session runs in its role folder, so Claude Code loads that role's CLAUDE.md. */
+const sessionCwd = (project: Project, role: string | null) => (role ? path.join(project.workdir, role) : project.workdir);
+
+/** Role names double as folder names: no slashes, no leading dot. */
+function assertRoleName(name: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]*$/.test(name)) {
+    throw new HttpError(400, `invalid role name "${name}": use letters, digits, space, _ . - (not starting with . or space)`);
+  }
+}
 
 /** Owns all state. The API and Telegram call it; the session manager reports back through SessionHost. */
 export class Orchestrator implements SessionHost {
@@ -53,6 +65,10 @@ export class Orchestrator implements SessionHost {
   // ---- Projects ----
 
   createProject(req: CreateProjectRequest): Project {
+    const projectRoles = req.roles ?? [];
+    projectRoles.forEach((r) => assertRoleName(r.name));
+    const names = projectRoles.map((r) => r.name);
+    if (new Set(names).size !== names.length) throw new HttpError(400, 'duplicate role names');
     const root = this.config.projects.rootDir;
     const workdir = path.resolve(root, req.workdir.replace(/^~(?=$|\/)/, homedir()));
     const rel = path.relative(root, workdir);
@@ -68,13 +84,47 @@ export class Orchestrator implements SessionHost {
     } else if (!statSync(workdir).isDirectory()) {
       throw new HttpError(400, `workdir is not a directory: ${workdir}`);
     }
-    const project: Project = { id: randomUUID(), name: req.name, workdir, createdAt: now() };
+    for (const r of projectRoles) {
+      const dir = path.join(workdir, r.name);
+      mkdirSync(dir, { recursive: true });
+      try {
+        writeFileSync(path.join(dir, 'CLAUDE.md'), `# Role: ${r.name}\n\n${r.description}\n`, { flag: 'wx' });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; // keep an existing CLAUDE.md
+      }
+    }
+    const project: Project = { id: randomUUID(), name: req.name, workdir, roles: names, createdAt: now() };
     this.db.insert(projects).values(project).run();
     return project;
   }
 
   listProjects(): Project[] {
     return this.db.select().from(projects).orderBy(asc(projects.createdAt)).all();
+  }
+
+  // ---- Roles (predefined; projects copy them into folders at creation) ----
+
+  listRoles(): Role[] {
+    return this.db.select().from(roles).orderBy(asc(roles.createdAt)).all();
+  }
+
+  createRole(req: RoleInput): Role {
+    this.assertRoleNameFree(req.name);
+    const role: Role = { id: randomUUID(), name: req.name, description: req.description, createdAt: now() };
+    this.db.insert(roles).values(role).run();
+    return role;
+  }
+
+  updateRole(id: string, req: RoleInput): Role {
+    const role = this.getRole(id);
+    this.assertRoleNameFree(req.name, id);
+    this.db.update(roles).set({ name: req.name, description: req.description }).where(eq(roles.id, id)).run();
+    return { ...role, name: req.name, description: req.description };
+  }
+
+  deleteRole(id: string): void {
+    this.getRole(id);
+    this.db.delete(roles).where(eq(roles.id, id)).run();
   }
 
   // ---- Sessions ----
@@ -96,9 +146,13 @@ export class Orchestrator implements SessionHost {
 
   startSession(projectId: string, req: StartSessionRequest): Session {
     const project = this.getProject(projectId);
+    if (req.role && !project.roles.includes(req.role)) {
+      throw new HttpError(400, `project has no role "${req.role}"`);
+    }
     const session: Session = {
       id: randomUUID(),
       projectId,
+      role: req.role ?? null,
       claudeSessionId: null,
       status: 'running',
       model: req.model ?? this.config.claude.defaultModel,
@@ -108,7 +162,7 @@ export class Orchestrator implements SessionHost {
     };
     this.db.insert(sessions).values(session).run();
     this.output(session.id, 'user', { text: req.prompt });
-    this.manager.start(session.id, { workdir: project.workdir, model: session.model, prompt: req.prompt });
+    this.manager.start(session.id, { workdir: sessionCwd(project, session.role), model: session.model, prompt: req.prompt });
     return session;
   }
 
@@ -128,7 +182,7 @@ export class Orchestrator implements SessionHost {
     this.db.update(sessions).set({ endedAt: null }).where(eq(sessions.id, sessionId)).run();
     this.output(sessionId, 'user', { text });
     this.manager.start(sessionId, {
-      workdir: project.workdir,
+      workdir: sessionCwd(project, session.role),
       model: session.model,
       prompt: text,
       resume: session.claudeSessionId,
@@ -249,6 +303,19 @@ export class Orchestrator implements SessionHost {
     const project = this.db.select().from(projects).where(eq(projects.id, id)).get();
     if (!project) throw new HttpError(404, 'Project not found');
     return project;
+  }
+
+  private getRole(id: string): Role {
+    const role = this.db.select().from(roles).where(eq(roles.id, id)).get();
+    if (!role) throw new HttpError(404, 'Role not found');
+    return role;
+  }
+
+  private assertRoleNameFree(name: string, exceptId?: string): void {
+    assertRoleName(name);
+    if (this.listRoles().some((r) => r.name === name && r.id !== exceptId)) {
+      throw new HttpError(409, `a role named "${name}" already exists`);
+    }
   }
 
   getSession(id: string): Session {

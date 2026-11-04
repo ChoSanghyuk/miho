@@ -13,8 +13,9 @@ export function ProjectPage({ projectName }: { projectName: string }) {
     enabled: !!project,
   });
   const [prompt, setPrompt] = useState('');
+  const [role, setRole] = useState('');
   const start = useMutation({
-    mutationFn: () => api.startSession(projectId, { prompt }),
+    mutationFn: () => api.startSession(projectId, { prompt, role: role || undefined }),
     onSuccess: (s) => (location.hash = `#/sessions/${s.id}`),
   });
 
@@ -42,6 +43,16 @@ export function ProjectPage({ projectName }: { projectName: string }) {
           required
         />
         <div className="actions">
+          {!!project?.roles.length && (
+            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
+              <option value="">Project root</option>
+              {project.roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          )}
           <button disabled={start.isPending || !project}>Start session</button>
         </div>
         {start.error && <p className="error">{start.error.message}</p>}
@@ -55,6 +66,7 @@ export function ProjectPage({ projectName }: { projectName: string }) {
             <a href={`#/sessions/${s.id}`} className="card row">
               <StatusPill status={s.status} />
               <span className="mono">{s.id.slice(0, 8)}</span>
+              {s.role && <strong>{s.role}</strong>}
               <span className="muted">{s.model}</span>
               <span className="muted">${s.costUsd.toFixed(4)}</span>
               <span className="muted grow-right">{new Date(s.startedAt).toLocaleString()}</span>

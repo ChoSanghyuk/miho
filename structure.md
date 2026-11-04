@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects, Project (start session), Session (console), Decisions, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session), Session (console), Decisions, Roles, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill
 │     └─ styles.css           CSS variables, light/dark
 ```
@@ -107,12 +107,15 @@ Rules that keep the domains separate:
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `projects` | id, name, workdir, created_at | `name` is unique (checked on create, not by an index) and is what dashboard routes use. `workdir` is absolute, inside `projects.rootDir`, and must exist unless `createDir` is set |
-| `sessions` | id, project_id, claude_session_id, status, model, cost_usd, started_at, ended_at | `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
+| `projects` | id, name, workdir, created_at | `name` is unique (checked on create, not by an index) and is what dashboard routes use. `workdir` is absolute, inside `projects.rootDir`, and must exist unless `createDir` is set. `roles_json` lists the project's role folder names (`[]` = single session) |
+| `roles` | id, name, description, created_at | predefined roles from the Roles menu. `name` is unique (checked in code) and doubles as a folder name (`[A-Za-z0-9][A-Za-z0-9 _.-]*`) |
+| `sessions` | id, project_id, role, claude_session_id, status, model, cost_usd, started_at, ended_at | `role` is null for the project root; `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
 | `messages` | seq (autoincrement), id, session_id, role, body_json | console history; ordered by `seq`. Roles: user, assistant, tool, system |
 | `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options} → answer {choice}. Status pending → answered or expired |
 
 Message `body` shapes: `{text}` (user/assistant), `{tool, input}` (tool call), `{toolUseId, result, isError}` (tool result, truncated to 4000 chars).
+
+**Roles.** Creating a project with `roles` makes `<workdir>/<role>/CLAUDE.md` (`# Role: <name>` + description) for each one; an existing CLAUDE.md is kept. The request carries name and description, so roles added for one project only are never stored in `roles`, and editing or deleting a predefined role doesn't touch existing projects. A session started with a `role` runs with `cwd = <workdir>/<role>` (also on resume), so Claude Code loads that role's CLAUDE.md.
 
 Schema change workflow: edit `schema.ts`, run `pnpm --filter @orch/server db:generate`, and commit the new file in `drizzle/`. It is applied automatically on the next start.
 
@@ -192,8 +195,9 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 |---|---|
 | `POST /api/login` `{token}` | sets the HttpOnly `orch_token` cookie (30 days) |
 | `GET /api/health` | `{ok:true}`; the dashboard also uses it as its "logged in?" check |
-| `GET/POST /api/projects` | list / create `{name, workdir, createDir?}` (workdir relative to or inside `rootDir`). Missing workdir → 404 unless `createDir: true`, which creates it; duplicate name → 409 |
-| `GET/POST /api/projects/:id/sessions` | list / start `{prompt, model?}` |
+| `GET/POST /api/projects` | list / create `{name, workdir, createDir?, roles?: [{name, description}]}` (workdir relative to or inside `rootDir`). Missing workdir → 404 unless `createDir: true`, which creates it; duplicate name → 409 |
+| `GET/POST /api/projects/:id/sessions` | list / start `{prompt, model?, role?}` (role must be one of the project's, else 400) |
+| `GET/POST /api/roles`, `PUT/DELETE /api/roles/:id` | predefined roles: list / create / update `{name, description}` / delete. Duplicate name → 409 |
 | `GET /api/sessions/:id` | one session |
 | `GET/POST /api/sessions/:id/messages` | history / send `{text}` (202). Resumes if interrupted, error or terminated |
 | `POST /api/sessions/:id/interrupt` | 204 |
@@ -208,7 +212,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 **Dashboard.**
 - **Login:** `App` first queries `/api/health`. A 401 shows `LoginPage`, which posts the token and gets the cookie.
-- **Routes:** hash routes `#/`, `#/projects/<name>` (URL-encoded project name, resolved from the projects list), `#/sessions/<id>`, `#/decisions`.
+- **Routes:** hash routes `#/`, `#/projects/<name>` (URL-encoded project name, resolved from the projects list), `#/sessions/<id>`, `#/decisions`, `#/roles`.
 - **Create project:** if the server answers 404 (folder missing), the page asks with `confirm()` and retries with `createDir: true`.
 - **Live updates:** `useEvents` opens `/ws`. Browsers send the cookie on the WebSocket handshake, which is why auth uses a cookie rather than a header. Events update the TanStack Query cache directly (`session_output` appends messages, `session_status` updates a session) or invalidate queries (decisions, sessions). After a reconnect, every query is invalidated to catch up.
 - **Dev setup:** in dev, Vite on :5173 proxies `/api` and `/ws` to :4000.

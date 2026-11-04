@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import type { Decision, Project, ServerEvent, Session, SessionMessage } from '@orch/shared';
+import type { Decision, Project, Role, ServerEvent, Session, SessionMessage } from '@orch/shared';
 import { buildApp } from './app.js';
 import type { Config } from './config.js';
+import type { SessionManagerFactory } from './sessions/types.js';
 import { FakeSessionManager } from './sessions/fake.js';
 
 let root: string;
@@ -26,11 +27,14 @@ const config = (): Config => ({
   mcp: { codex: { enabled: false, command: 'codex', args: [] } },
 });
 
-async function setup(dbFile = `db-${Math.random()}.sqlite`) {
+async function setup(
+  dbFile = `db-${Math.random()}.sqlite`,
+  sessionManager: SessionManagerFactory = (host) => new FakeSessionManager(host),
+) {
   const { app, orch } = await buildApp({
     config: config(),
     dbPath: path.join(root, dbFile),
-    sessionManager: (host) => new FakeSessionManager(host),
+    sessionManager,
     ownerToken: TOKEN,
   });
   const events: ServerEvent[] = [];
@@ -219,6 +223,73 @@ describe('backend core', () => {
     await new Promise((r) => setTimeout(r, 20));
     assert.ok(received.some((e) => e.type === 'task_done' && e.sessionId === session.id));
     ws.close();
+    await t.app.close();
+  });
+});
+
+describe('roles', () => {
+  test('CRUD for predefined roles', async () => {
+    const t = await setup();
+    const pm = await t.req<Role>('POST', '/api/roles', { name: 'Product Manager', description: 'Owns the spec.' });
+    assert.equal(pm.status, 201);
+    assert.equal((await t.req('POST', '/api/roles', { name: 'Product Manager', description: '' })).status, 409);
+    assert.equal((await t.req('POST', '/api/roles', { name: '../x', description: '' })).status, 400);
+    assert.equal((await t.req('POST', '/api/roles', { name: 'a/b', description: '' })).status, 400);
+    const upd = await t.req<Role>('PUT', `/api/roles/${pm.body.id}`, { name: 'PM', description: 'Writes specs.' });
+    assert.equal(upd.body.name, 'PM');
+    assert.deepEqual(
+      (await t.req<Role[]>('GET', '/api/roles')).body.map((r) => [r.name, r.description]),
+      [['PM', 'Writes specs.']],
+    );
+    assert.equal((await t.req('DELETE', `/api/roles/${pm.body.id}`)).status, 204);
+    assert.equal((await t.req('DELETE', `/api/roles/${pm.body.id}`)).status, 404);
+    assert.equal((await t.req('PUT', '/api/roles/nope', { name: 'x', description: '' })).status, 404);
+    await t.app.close();
+  });
+
+  test('project with roles gets a CLAUDE.md per role, keeping existing ones', async () => {
+    const t = await setup();
+    mkdirSync(path.join(root, 'team', 'frontend'), { recursive: true });
+    writeFileSync(path.join(root, 'team', 'frontend', 'CLAUDE.md'), 'mine');
+    const roles = [
+      { name: 'backend', description: 'Builds the API.' },
+      { name: 'frontend', description: 'Builds the UI.' },
+    ];
+    const dup = await t.req('POST', '/api/projects', { name: 'team', workdir: 'team', roles: [roles[0], roles[0]] });
+    assert.equal(dup.status, 400);
+    const res = await t.req<Project>('POST', '/api/projects', { name: 'team', workdir: 'team', roles });
+    assert.equal(res.status, 201);
+    assert.deepEqual(res.body.roles, ['backend', 'frontend']);
+    assert.equal(readFileSync(path.join(root, 'team', 'backend', 'CLAUDE.md'), 'utf8'), '# Role: backend\n\nBuilds the API.\n');
+    assert.equal(readFileSync(path.join(root, 'team', 'frontend', 'CLAUDE.md'), 'utf8'), 'mine');
+    await t.app.close();
+  });
+
+  test('a role session runs in the role folder', async () => {
+    const workdirs: string[] = [];
+    const t = await setup(undefined, (host) => {
+      const m = new FakeSessionManager(host);
+      return {
+        start: (id, opts) => (workdirs.push(opts.workdir), m.start(id, opts)),
+        send: (id, text) => m.send(id, text),
+        interrupt: (id) => m.interrupt(id),
+        stop: (id) => m.stop(id),
+      };
+    });
+    const project = (
+      await t.req<Project>('POST', '/api/projects', {
+        name: 'crew',
+        workdir: 'crew',
+        createDir: true,
+        roles: [{ name: 'qa', description: 'Tests things.' }],
+      })
+    ).body;
+    const bad = await t.req('POST', `/api/projects/${project.id}/sessions`, { prompt: 'hi', role: 'nope' });
+    assert.equal(bad.status, 400);
+    const s = await t.req<Session>('POST', `/api/projects/${project.id}/sessions`, { prompt: 'hi', role: 'qa' });
+    assert.equal(s.body.role, 'qa');
+    await t.startSession(project.id, 'root');
+    assert.deepEqual(workdirs, [path.join(root, 'crew', 'qa'), path.join(root, 'crew')]);
     await t.app.close();
   });
 });

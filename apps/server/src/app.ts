@@ -8,12 +8,18 @@ import { openDb } from './db/index.js';
 import { HttpError, Orchestrator } from './orchestrator.js';
 import type { SessionManagerFactory } from './sessions/types.js';
 
+const roleBody = z.object({ name: z.string().min(1), description: z.string() });
 const createProjectBody = z.object({
   name: z.string().min(1),
   workdir: z.string().min(1),
   createDir: z.boolean().optional(),
+  roles: z.array(roleBody).optional(),
 });
-const startSessionBody = z.object({ prompt: z.string().min(1), model: z.string().min(1).optional() });
+const startSessionBody = z.object({
+  prompt: z.string().min(1),
+  model: z.string().min(1).optional(),
+  role: z.string().min(1).optional(),
+});
 const sendMessageBody = z.object({ text: z.string().min(1) });
 const answerDecisionBody = z.object({
   answer: z.union([z.object({ behavior: z.enum(['allow', 'deny']) }), z.object({ choice: z.string() })]),
@@ -59,6 +65,17 @@ export async function buildApp(opts: {
     return orch.createProject(createProjectBody.parse(req.body));
   });
   app.get('/api/projects', async () => orch.listProjects());
+
+  app.get('/api/roles', async () => orch.listRoles());
+  app.post('/api/roles', async (req, reply) => {
+    reply.status(201);
+    return orch.createRole(roleBody.parse(req.body));
+  });
+  app.put('/api/roles/:id', async (req) => orch.updateRole(idParams.parse(req.params).id, roleBody.parse(req.body)));
+  app.delete('/api/roles/:id', async (req, reply) => {
+    orch.deleteRole(idParams.parse(req.params).id);
+    return reply.status(204).send();
+  });
 
   app.get('/api/projects/:id/sessions', async (req) => orch.listSessions(idParams.parse(req.params).id));
   app.post('/api/projects/:id/sessions', async (req, reply) => {

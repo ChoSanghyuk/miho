@@ -5,10 +5,11 @@ import { LoginPage } from './pages/LoginPage';
 import { DecisionsPage } from './pages/DecisionsPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectsPage } from './pages/ProjectsPage';
+import { RolesPage } from './pages/RolesPage';
 import { SessionPage } from './pages/SessionPage';
 import { useEvents } from './useEvents';
 
-/** Hash routes: #/  #/projects/:name  #/sessions/:id  #/decisions */
+/** Hash routes: #/  #/projects/:name  #/sessions/:id  #/decisions  #/roles */
 function useRoute(): string[] {
   const read = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   const [route, setRoute] = useState(read);
@@ -39,6 +40,7 @@ function Shell() {
         <a href="#/" className="brand">AI Orchestrator</a>
         <nav>
           <a href="#/">Projects</a>
+          <a href="#/roles">Roles</a>
           <a href="#/decisions">
             Decisions
             {!!pending.data?.length && <span className="badge">{pending.data.length}</span>}
@@ -53,6 +55,8 @@ function Shell() {
           <SessionPage sessionId={id} />
         ) : section === 'decisions' ? (
           <DecisionsPage />
+        ) : section === 'roles' ? (
+          <RolesPage />
         ) : (
           <ProjectsPage />
         )}

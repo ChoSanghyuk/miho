@@ -13,12 +13,29 @@ export interface Project {
   id: string;
   name: string;
   workdir: string;
+  /** Role folder names under workdir; empty for a single-session project. */
+  roles: string[];
   createdAt: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+}
+
+export interface RoleInput {
+  /** Also the folder name under the project workdir. */
+  name: string;
+  description: string;
 }
 
 export interface Session {
   id: string;
   projectId: string;
+  /** Role folder the session runs in; null = project root. */
+  role: string | null;
   claudeSessionId: string | null;
   status: SessionStatus;
   model: string;
@@ -64,11 +81,18 @@ export interface CreateProjectRequest {
   workdir: string;
   /** Create `workdir` if it doesn't exist. Without it, a missing workdir is a 404. */
   createDir?: boolean;
+  /** Creates <workdir>/<name>/CLAUDE.md for each role (existing files are kept). */
+  roles?: RoleInput[];
 }
+
+export type CreateRoleRequest = RoleInput;
+export type UpdateRoleRequest = RoleInput;
 
 export interface StartSessionRequest {
   prompt: string;
   model?: string;
+  /** One of the project's roles; the session runs in that role's folder. */
+  role?: string;
 }
 
 export interface SendMessageRequest {

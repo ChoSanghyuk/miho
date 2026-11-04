@@ -5,6 +5,14 @@ export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   workdir: text('workdir').notNull(),
+  roles: text('roles_json', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: text('created_at').notNull(),
+});
+
+export const roles = sqliteTable('roles', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
   createdAt: text('created_at').notNull(),
 });
 
@@ -13,6 +21,7 @@ export const sessions = sqliteTable('sessions', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  role: text('role'),
   claudeSessionId: text('claude_session_id'),
   status: text('status').$type<SessionStatus>().notNull(),
   model: text('model').notNull(),
