@@ -141,6 +141,32 @@ export class Orchestrator implements SessionHost {
     return updated;
   }
 
+  /** Removes the project and its sessions, history, decisions and tasks from the DB. The workdir is never touched. */
+  deleteProject(id: string): void {
+    this.getProject(id);
+    const projectSessions = this.db.select().from(sessions).where(eq(sessions.projectId, id)).all();
+    const busy = projectSessions.filter((s) => BUSY.includes(s.status));
+    if (busy.length) throw new HttpError(409, `Project has ${busy.length} busy session(s); interrupt or terminate them first`);
+    const projectTasks = this.db.select().from(tasks).where(eq(tasks.projectId, id)).all();
+
+    const sessionIds = projectSessions.map((s) => s.id);
+    for (const s of projectSessions) if (s.status === 'idle') this.manager.stop(s.id);
+    this.db.transaction((tx) => {
+      if (sessionIds.length) {
+        tx.delete(decisions).where(inArray(decisions.sessionId, sessionIds)).run();
+        tx.delete(messages).where(inArray(messages.sessionId, sessionIds)).run();
+      }
+      tx.delete(tasks).where(eq(tasks.projectId, id)).run();
+      tx.delete(sessions).where(eq(sessions.projectId, id)).run();
+      tx.delete(projects).where(eq(projects.id, id)).run();
+    });
+    // Groups may mix projects: renumber what is left of each affected group.
+    for (const groupId of new Set(projectTasks.map((t) => t.groupId).filter((g) => g !== null))) {
+      this.writeGroup(groupId, this.groupMembers(groupId).map((t) => t.id));
+    }
+    if (projectTasks.length) this.tasksChanged();
+  }
+
   listProjects(): Project[] {
     return this.db.select().from(projects).orderBy(asc(projects.createdAt)).all();
   }

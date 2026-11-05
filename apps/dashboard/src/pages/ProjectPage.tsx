@@ -34,13 +34,21 @@ export function ProjectPage({ projectName }: { projectName: string }) {
       void qc.invalidateQueries({ queryKey: ['projects'] });
     },
   });
+  const remove = useMutation({
+    mutationFn: () => api.deleteProject(projectId),
+    onSuccess: () => {
+      location.hash = '#/';
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
 
   return (
     <>
-      <p className="crumbs">
-        <a href="#/">Projects</a> /
-      </p>
-      <h1>{projectName}</h1>
+      <h1 className="path-title">
+        <a href="#/">Projects</a>
+        <span className="sep">/</span>
+        {projectName}
+      </h1>
       {projects.data && !project && <p className="error">No project named "{projectName}".</p>}
       {project && (
         <p className="path page-path" title={project.workdir}>
@@ -154,6 +162,22 @@ export function ProjectPage({ projectName }: { projectName: string }) {
           </li>
         ))}
       </ul>
+
+      {project && (
+        <div className="actions">
+          <button
+            className="danger"
+            disabled={remove.isPending}
+            onClick={() => {
+              const msg = `Delete project "${project.name}" with its sessions, history and tasks?\n\nThe directory ${project.workdir} is kept.`;
+              if (confirm(msg)) remove.mutate();
+            }}
+          >
+            Delete project
+          </button>
+          {remove.error && <p className="error">{remove.error.message}</p>}
+        </div>
+      )}
     </>
   );
 }

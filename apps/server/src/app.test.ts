@@ -126,6 +126,29 @@ describe('backend core', () => {
     await t.app.close();
   });
 
+  test('delete project removes its records but keeps the directory', async () => {
+    const t = await setup();
+    const project = await t.createProject('alpha');
+    writeFileSync(path.join(root, 'alpha', 'keep.txt'), 'x');
+    const session = await t.startSession(project.id, '[decision]');
+    await t.waitFor((e) => e.type === 'decision_needed');
+    assert.equal((await t.req('DELETE', `/api/projects/${project.id}`)).status, 409);
+
+    assert.equal((await t.req('POST', `/api/sessions/${session.id}/interrupt`)).status, 204);
+    await t.req('POST', '/api/tasks', { projectId: project.id, name: 't', content: 'c', parallel: false });
+    assert.equal((await t.req('DELETE', `/api/projects/${project.id}`)).status, 204);
+
+    assert.deepEqual((await t.req<Project[]>('GET', '/api/projects')).body, []);
+    assert.equal((await t.req('GET', `/api/sessions/${session.id}`)).status, 404);
+    assert.deepEqual((await t.req<Decision[]>('GET', '/api/decisions')).body, []);
+    assert.deepEqual((await t.req<TasksResponse>('GET', '/api/tasks')).body.tasks, []);
+    assert.equal(readFileSync(path.join(root, 'alpha', 'keep.txt'), 'utf8'), 'x');
+    assert.equal((await t.req('DELETE', `/api/projects/${project.id}`)).status, 404);
+    await t.createProject('alpha'); // the name and folder are free again
+    rmSync(path.join(root, 'alpha', 'keep.txt'));
+    await t.app.close();
+  });
+
   test('permission decision pauses the session until answered', async () => {
     const t = await setup();
     const project = await t.createProject('alpha');

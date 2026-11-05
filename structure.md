@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles, delete), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
 │     └─ styles.css           design tokens (CSS variables, light/dark) and all styles; fonts are linked in index.html
 ```
@@ -213,6 +213,7 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 | `POST /api/login` `{token}` | sets the HttpOnly `orch_token` cookie (30 days) |
 | `GET /api/health` | `{ok:true}`; the dashboard also uses it as its "logged in?" check |
 | `GET/POST /api/projects` | list / create `{name, workdir, createDir?, roles?: [{name, description}]}` (workdir relative to or inside `rootDir`). Missing workdir → 404 unless `createDir: true`, which creates it; duplicate name → 409 |
+| `DELETE /api/projects/:id` | 204. Removes the project and its sessions, messages, decisions and tasks from the DB; idle sessions are stopped. The workdir on disk is never touched. Any queued/running/waiting_decision session → 409 |
 | `POST /api/projects/:id/roles` `{name, description}` | add a role (folder + CLAUDE.md) to an existing project; 201 with the project. Role already in the project → 409 |
 | `GET/POST /api/projects/:id/sessions` | list / start `{prompt, model?, role?}` (role must be one of the project's, else 400) |
 | `GET/POST /api/roles`, `PUT/DELETE /api/roles/:id` | predefined roles: list / create / update `{name, description, guidelineIds?, descriptionIndex?}` / delete. Duplicate name → 409 |

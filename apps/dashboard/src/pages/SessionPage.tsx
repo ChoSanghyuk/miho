@@ -32,12 +32,18 @@ export function SessionPage({ sessionId }: { sessionId: string }) {
 
   return (
     <>
-      <p className="crumbs">
-        <a href="#/">Projects</a> /{' '}
-        {project && <a href={`#/projects/${encodeURIComponent(project.name)}`}>{project.name}</a>} /
-      </p>
       <div className="title-row">
-        <h1 className="mono">{sessionId.slice(0, 8)}</h1>
+        <h1 className="path-title">
+          <a href="#/">Projects</a>
+          <span className="sep">/</span>
+          {project && (
+            <>
+              <a href={`#/projects/${encodeURIComponent(project.name)}`}>{project.name}</a>
+              <span className="sep">/</span>
+            </>
+          )}
+          <span className="mono">{sessionId.slice(0, 8)}</span>
+        </h1>
         {status && <StatusPill status={status} />}
         {s && (
           <span className="meta">
