@@ -98,7 +98,7 @@ Generated at runtime and git-ignored: `orchestrator.sqlite*`, `logs/`, `backups/
 Rules that keep the domains separate:
 
 1. **`Orchestrator` is the only writer.** Routes and Telegram call its methods. Nothing else touches the database or emits events. Every status change goes through `Orchestrator.setStatus`, which persists the status and then emits `session_status`.
-2. **The session manager never touches state.** It reports through the `SessionHost` interface (`output`, `setStatus`, `setClaudeSessionId`, `requestDecision`, `done`, `limitReached`, `fail`), which `Orchestrator` implements. To swap the AI backend, write a new `SessionManager`; `index.ts` chooses one with `ORCH_FAKE_SESSIONS=1`.
+2. **The session manager never touches state.** It reports through the `SessionHost` interface (`output`, `setStatus`, `setClaudeSessionId`, `requestDecision`, `done`, `limitReached`, `fail`, `delegate`), which `Orchestrator` implements. To swap the AI backend, write a new `SessionManager`; `index.ts` chooses one with `ORCH_FAKE_SESSIONS=1`.
 3. **Front doors are peers.** The dashboard and Telegram both answer decisions through `Orchestrator.answerDecision(id, answer, via)`. The first answer wins; a later one gets `409`. Both learn the outcome from the `decision_resolved` event, so each one updates itself.
 4. **`packages/shared` is the contract.** It holds types only, imported with `import type`. Change it first, then fix the compile errors in server and dashboard.
 5. **Events are fire-and-forget.** A failing subscriber (for example a Telegram send) is logged and never blocks the session.
@@ -112,7 +112,7 @@ Rules that keep the domains separate:
 | `guidelines` | id, name, description, created_at | shared sections roles compose in. `name` is unique; deleting one a role uses → 409 |
 | `sessions` | id, project_id, role, claude_session_id, status, model, cost_usd, started_at, ended_at | `role` is null for the project root; `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
 | `messages` | seq (autoincrement), id, session_id, role, body_json | console history; ordered by `seq`. Roles: user, assistant, tool, system |
-| `tasks` | id, project_id, role, name, content, parallel, status, group_id, position, session_id, created_at | todo tasks (see "Todo tasks"). A group is the tasks sharing `group_id`, ordered by `position`; no groups table, and a group of one is dissolved |
+| `tasks` | id, project_id, role, name, content, parallel, status, group_id, position, session_id, delegated_by, report, created_at | todo tasks (see "Todo tasks"). A group is the tasks sharing `group_id`, ordered by `position`; no groups table, and a group of one is dissolved. `delegated_by`/`report`: see "Delegation" |
 | `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options} → answer {choice}. Status pending → answered or expired |
 
 Message `body` shapes: `{text}` (user/assistant), `{tool, input}` (tool call), `{toolUseId, result, isError}` (tool result, truncated to 4000 chars).
@@ -189,6 +189,19 @@ Status: `wait` (default) → `run` (owner activated it) → `working` (its sessi
 
 **Limits and restarts.** `limitReached` pauses the queue until `retryAt` (15 min if unknown), in memory only. A task whose turn then fails goes back to `run` and keeps its `sessionId`. When the pause ends, that session gets "Continue where you left off." instead of the content. Restart recovery does the same for `working` tasks. Interrupting or terminating a task's session marks it `failed`.
 
+## Delegation (sessions handing work to other roles)
+
+In a project with roles, every session the owner starts (directly or as a todo task) is a possible **lead**: it gets an in-process MCP server `team` with one tool, `delegate({role, instructions})`, for the project's *other* roles (`StartOptions.team`, auto-allowed via `allowedTools`). Sessions doing delegated work get no tool, so delegation is one level deep.
+
+- **`delegate`** (`Orchestrator.delegate`) inserts a `run` task: `role`, `content = instructions`, non-parallel, `delegated_by = groupId = lead session id`, and returns at once. The lead ends its turn; nothing blocks, so no slot deadlock.
+- **Running.** Normal task scheduling: one at a time per project, in delegation order, and a role continues in its earlier session (group rule). A failed delegation doesn't block the lead's later ones.
+- **Results.** When a delegated turn ends, its result (or error) is stored in `report`. `deliverReports()` (run by the scheduler) sends all waiting reports to their lead as one `system` message ("Delegation results: …") once the lead is `idle` or `interrupted` (restart), then clears `report`.
+- **Questions** from workers go to the owner through the normal decision flow.
+- **Guards.** At most 20 delegations per owner message to the lead. Interrupting or terminating the lead fails its open delegations, stops a running one and drops undelivered reports.
+- **Alerts.** `task_done.intermediate` is true for worker turns and for lead turns with delegations still pending; Telegram skips those, so a run sends one alert.
+
+Who to call and in what order is the lead's judgment, steered by its role's CLAUDE.md.
+
 ## Events (`ServerEvent` in `packages/shared`)
 
 | Event | Emitted when | Consumers |
@@ -197,7 +210,7 @@ Status: `wait` (default) → `run` (owner activated it) → `working` (its sessi
 | `session_status` | every status change | WS, log |
 | `decision_needed` | Claude asks for a permission or answer | WS (badge + card), Telegram (buttons), log |
 | `decision_resolved` | answered (`answeredVia` web or telegram) or expired (`null`) | WS (card disappears), Telegram (edits the prompt message), log |
-| `task_done` | a turn finished successfully (result, costUsd, durationMs) | WS, Telegram, log |
+| `task_done` | a turn finished successfully (result, costUsd, durationMs, intermediate) | WS, Telegram (not intermediate), log |
 | `limit_reached` | usage limit hit (retryAt or null) | WS, Telegram, log |
 | `session_error` | turn failed or the SDK stream died | WS, Telegram (with a Resume button), log |
 | `tasks_changed` | any task change, or the task queue paused/resumed | WS (refetch `/api/tasks`) |
@@ -262,7 +275,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
   - `ORCH_OWNER_TOKEN`: required; the server exits without it.
   - `TELEGRAM_BOT_TOKEN`: Telegram is disabled with a warning if it or `chatId` is missing.
   - `ANTHROPIC_API_KEY`: optional; otherwise the claude.ai login is used.
-- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens. Its prompts `[decision]` and `[limit]` trigger a permission and a usage limit (reset 50 ms later).
+- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens. Its prompts `[decision]` and `[limit]` trigger a permission and a usage limit (reset 50 ms later); a line `[delegate:<role>] <text>` calls `delegate`.
 
 ## Operations
 
@@ -279,7 +292,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 ## Testing
 
-- `app.test.ts` drives the real `buildApp` with `FakeSessionManager` and a temporary SQLite file. It covers the lifecycle, decisions, interrupt, restart recovery, resume, todo tasks (ordering, session reuse, per-project serialization, limit pause), WebSocket, auth and 4xx handling.
+- `app.test.ts` drives the real `buildApp` with `FakeSessionManager` and a temporary SQLite file. It covers the lifecycle, decisions, interrupt, restart recovery, resume, todo tasks (ordering, session reuse, per-project serialization, limit pause), delegation, WebSocket, auth and 4xx handling.
 - `telegram.test.ts` replaces outgoing Bot API calls via `bot.api.config.use` and feeds updates with `bot.handleUpdate`.
 - Real-Claude checks are manual. Use a cheap model and an isolated copy (for example a git worktree with its own `ORCH_CONFIG`), because `dbPath` is always `<repoRoot>/orchestrator.sqlite`.
 

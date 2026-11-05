@@ -13,6 +13,8 @@ export interface SessionHost {
   done(sessionId: string, result: { result: string; costUsd: number; durationMs: number }): void;
   limitReached(sessionId: string, retryAt: string | null): void;
   fail(sessionId: string, error: string): void;
+  /** The `delegate` tool: queues work for another role and returns the tool's reply. Throws if refused. */
+  delegate(sessionId: string, role: string, instructions: string): string;
 }
 
 export interface StartOptions {
@@ -23,6 +25,8 @@ export interface StartOptions {
   resume?: string;
   /** Cost already recorded for this session; the SDK's running total on resume includes it. */
   priorCostUsd?: number;
+  /** Roles this session may hand work to with the `delegate` tool; absent or empty = no tool. */
+  team?: string[];
 }
 
 /** The AI integration boundary: FakeSessionManager for tests, AgentSdkSessionManager for real use. */

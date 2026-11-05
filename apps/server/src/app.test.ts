@@ -559,6 +559,145 @@ describe('tasks', () => {
   });
 });
 
+describe('delegation', () => {
+  const ROLES = ['pm', 'backend', 'frontend'].map((name) => ({ name, description: name }));
+
+  async function teamSetup(dbFile?: string, dir = `team-${Math.random()}`) {
+    const t = await setup(dbFile);
+    const project =
+      (await t.req<Project[]>('GET', '/api/projects')).body.find((p) => p.name === dir) ??
+      (await t.req<Project>('POST', '/api/projects', { name: dir, workdir: dir, createDir: true, roles: ROLES })).body;
+    const startLead = async (prompt: string) =>
+      (await t.req<Session>('POST', `/api/projects/${project.id}/sessions`, { prompt, role: 'pm' })).body;
+    const delegations = async (leadId: string) =>
+      (await t.req<TasksResponse>('GET', '/api/tasks')).body.tasks
+        .filter((x) => x.delegatedBy === leadId)
+        .sort((x, y) => x.position - y.position);
+    const history = async (id: string) => (await t.req<SessionMessage[]>('GET', `/api/sessions/${id}/messages`)).body;
+    const reportsTo = async (leadId: string) =>
+      (await history(leadId)).filter((m) => m.role === 'system').map((m) => (m.body as { text: string }).text).join('\n');
+    /** Polls until the predicate holds. */
+    const until = async (pred: () => Promise<boolean>) => {
+      for (let i = 0; i < 300; i++) {
+        if (await pred()) return;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error('Timed out');
+    };
+    const settled = (leadId: string) => async () => {
+      const ds = await delegations(leadId);
+      const lead = (await t.req<Session>('GET', `/api/sessions/${leadId}`)).body;
+      return ds.length > 0 && ds.every((d) => (d.status === 'done' || d.status === 'failed') && d.report === null) && lead.status === 'idle';
+    };
+    return { ...t, dir, project, startLead, delegations, history, reportsTo, until, settled };
+  }
+
+  test('a lead hands work to roles one at a time; results come back; a role keeps its session', async () => {
+    const t = await teamSetup();
+    const lead = await t.startLead('[delegate:backend] build api\n[delegate:frontend] build ui');
+    await t.until(t.settled(lead.id));
+
+    const [be, fe] = await t.delegations(lead.id);
+    assert.deepEqual([be!.role, fe!.role, be!.groupId, fe!.parallel], ['backend', 'frontend', lead.id, false]);
+    assert.ok(be!.sessionId && fe!.sessionId && be!.sessionId !== fe!.sessionId);
+    const worker = (await t.req<Session>('GET', `/api/sessions/${be!.sessionId}`)).body;
+    assert.equal(worker.role, 'backend');
+    const reports = await t.reportsTo(lead.id);
+    assert.match(reports, /backend — done[\s\S]*Echo: build api/);
+    assert.match(reports, /frontend — done[\s\S]*Echo: build ui/);
+
+    // Only the lead's last turn is a final task_done.
+    const dones = t.events.filter((e) => e.type === 'task_done');
+    assert.ok(dones.filter((e) => e.sessionId !== lead.id).every((e) => e.type === 'task_done' && e.intermediate));
+    assert.equal(dones.filter((e) => e.type === 'task_done' && !e.intermediate).length, 1);
+
+    // Second round: backend continues in its session.
+    await t.req('POST', `/api/sessions/${lead.id}/messages`, { text: '[delegate:backend] fix api' });
+    await t.until(async () => (await t.delegations(lead.id)).length === 3 && (await t.settled(lead.id))());
+    const third = (await t.delegations(lead.id))[2]!;
+    assert.equal(third.sessionId, be!.sessionId);
+    await t.app.close();
+  });
+
+  test('refuses unknown roles, its own role, and delegation from a worker', async () => {
+    const t = await teamSetup();
+    const lead = await t.startLead('[delegate:nobody] x\n[delegate:pm] y\n[delegate:backend] [delegate:frontend] z');
+    await t.until(t.settled(lead.id));
+    const done = t.events.find((e) => e.type === 'task_done' && e.sessionId === lead.id);
+    assert.ok(done?.type === 'task_done');
+    assert.equal(done.result.match(/delegate refused: Unknown role/g)?.length, 2);
+    assert.equal((await t.delegations(lead.id)).length, 1);
+    assert.match(await t.reportsTo(lead.id), /delegate refused: A session doing delegated work cannot delegate/);
+    await t.app.close();
+  });
+
+  test("a worker's question goes to the owner", async () => {
+    const t = await teamSetup();
+    const lead = await t.startLead('[delegate:backend] [decision] migrate');
+    const needed = await t.waitFor((e) => e.type === 'decision_needed');
+    assert.ok(needed.type === 'decision_needed');
+    const [task] = await t.delegations(lead.id);
+    assert.equal(needed.decision.sessionId, task!.sessionId);
+    await t.req('POST', `/api/decisions/${needed.decision.id}`, { answer: { behavior: 'allow' } });
+    await t.until(t.settled(lead.id));
+    assert.match(await t.reportsTo(lead.id), /permission: allow/);
+    await t.app.close();
+  });
+
+  test('a failed delegation is reported and does not block the next one', async () => {
+    const t = await teamSetup();
+    const lead = await t.startLead('[delegate:backend] [decision] a\n[delegate:frontend] b');
+    await t.waitFor((e) => e.type === 'decision_needed');
+    const [be] = await t.delegations(lead.id);
+    await t.req('POST', `/api/sessions/${be!.sessionId}/interrupt`);
+    await t.until(t.settled(lead.id));
+    const [failed, ok] = await t.delegations(lead.id);
+    assert.deepEqual([failed!.status, ok!.status], ['failed', 'done']);
+    assert.match(await t.reportsTo(lead.id), /backend — failed[\s\S]*Interrupted by the owner/);
+    await t.app.close();
+  });
+
+  test("interrupting the lead cancels its delegations and reports nothing", async () => {
+    const t = await teamSetup();
+    const lead = await t.startLead('[delegate:backend] [decision] a\n[delegate:frontend] b');
+    await t.waitFor((e) => e.type === 'decision_needed');
+    // The lead's own turn is over; make it busy again so interrupt is allowed.
+    await t.req('POST', `/api/sessions/${lead.id}/messages`, { text: '[decision] wait' });
+    await t.until(async () => (await t.req<Decision[]>('GET', '/api/decisions?status=pending')).body.length === 2);
+    assert.equal((await t.req('POST', `/api/sessions/${lead.id}/interrupt`)).status, 204);
+
+    const ds = await t.delegations(lead.id);
+    assert.deepEqual(ds.map((d) => [d.status, d.report]), [['failed', null], ['failed', null]]);
+    assert.equal((await t.req<Decision[]>('GET', '/api/decisions?status=pending')).body.length, 0);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(await t.reportsTo(lead.id), '');
+    await t.app.close();
+  });
+
+  test('caps delegations per owner message', async () => {
+    const t = await teamSetup();
+    const lines = Array.from({ length: 21 }, (_, i) => `[delegate:backend] t${i}`).join('\n');
+    const lead = await t.startLead(lines);
+    await t.until(t.settled(lead.id));
+    assert.equal((await t.delegations(lead.id)).length, 20);
+    const done = t.events.find((e) => e.type === 'task_done' && e.sessionId === lead.id);
+    assert.ok(done?.type === 'task_done' && done.result.includes('Delegation limit (20) reached'));
+    await t.app.close();
+  });
+
+  test('a delegation run survives a restart', async () => {
+    const first = await teamSetup('team-restart.sqlite', 'team-restart');
+    const lead = await first.startLead('[delegate:backend] [decision] a');
+    await first.waitFor((e) => e.type === 'decision_needed');
+    await first.app.close();
+
+    const second = await teamSetup('team-restart.sqlite', 'team-restart');
+    await second.until(second.settled(lead.id));
+    assert.match(await second.reportsTo(lead.id), /backend — done[\s\S]*Continue where you left off/);
+    await second.app.close();
+  });
+});
+
 describe('client errors', () => {
   test('malformed or empty JSON bodies get 400, not 500', async () => {
     const { app } = await setup();

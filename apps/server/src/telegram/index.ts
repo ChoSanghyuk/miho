@@ -48,6 +48,7 @@ export function createTelegram(
 
     switch (event.type) {
       case 'task_done': {
+        if (event.intermediate) return; // one alert per delegation run, when the lead is done
         const secs = Math.round(event.durationMs / 1000);
         await send(`Task done — ${label(event.sessionId)}\n\n${clip(event.result, 1500)}\n\n$${event.costUsd.toFixed(4)} · ${secs}s`);
         return;

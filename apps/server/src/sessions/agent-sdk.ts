@@ -1,15 +1,19 @@
 import {
+  createSdkMcpServer,
   query,
+  tool,
   type CanUseTool,
   type McpServerConfig,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 import type { Config } from '../config.js';
 import type { SessionHost, SessionManager, StartOptions } from './types.js';
 
 const MAX_TOOL_RESULT_CHARS = 4000;
+const DELEGATE_TOOL = 'mcp__team__delegate';
 
 /** Push-based input stream for a streaming-input SDK session. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -72,7 +76,8 @@ export class AgentSdkSessionManager implements SessionManager {
           model: opts.model,
           permissionMode: this.config.claude.permissionMode,
           canUseTool: this.canUseTool(sessionId),
-          mcpServers: this.mcpServers(),
+          mcpServers: { ...this.mcpServers(), ...this.teamServer(sessionId, opts.team) },
+          ...(opts.team?.length ? { allowedTools: [DELEGATE_TOOL] } : {}),
           ...(opts.resume ? { resume: opts.resume } : {}),
         },
       }),
@@ -251,6 +256,26 @@ export class AgentSdkSessionManager implements SessionManager {
         return { behavior: 'deny', message: 'Cancelled by the user.', interrupt: true };
       }
     };
+  }
+
+  /** In-process `team` server with the `delegate` tool; the orchestrator does the work through host.delegate. */
+  private teamServer(sessionId: string, team: string[] | undefined): Record<string, McpServerConfig> {
+    if (!team?.length) return {};
+    const delegate = tool(
+      'delegate',
+      `Hand a piece of work to another role's Claude session: ${team.join(', ')}. ` +
+        'Returns at once. Delegations run one at a time, in the order you make them, and a role keeps its context between them. ' +
+        "After delegating, end your turn: each result arrives later as a message. Anything the role is unsure about goes to the owner.",
+      { role: z.enum(team as [string, ...string[]]), instructions: z.string().min(1).describe('Self-contained instructions for that role') },
+      async ({ role, instructions }) => {
+        try {
+          return { content: [{ type: 'text', text: this.host.delegate(sessionId, role, instructions) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
+        }
+      },
+    );
+    return { team: createSdkMcpServer({ name: 'team', tools: [delegate] }) };
   }
 
   private mcpServers(): Record<string, McpServerConfig> {

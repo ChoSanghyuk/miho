@@ -106,6 +106,10 @@ export interface Task {
   position: number;
   /** Session the task ran (or is running) in. */
   sessionId: string | null;
+  /** Lead session that created this task with the `delegate` tool; null for the owner's tasks. */
+  delegatedBy: string | null;
+  /** A finished delegation's result, waiting to be delivered to the lead; null once delivered. */
+  report: string | null;
   createdAt: string;
 }
 
@@ -186,6 +190,8 @@ export type ServerEvent =
       result: string;
       costUsd: number;
       durationMs: number;
+      /** A turn inside a delegation run: a worker's, or a lead's with delegations still pending. */
+      intermediate: boolean;
     }
   | { type: 'limit_reached'; sessionId: string; retryAt: string | null }
   | { type: 'session_error'; sessionId: string; error: string }

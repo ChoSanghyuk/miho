@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
 import type {
   AnswerDecisionRequest,
   AnsweredVia,
@@ -47,9 +47,15 @@ const now = () => new Date().toISOString();
 const LIMIT_FALLBACK_MS = 15 * 60_000;
 const CONTINUE_PROMPT = 'Continue where you left off.';
 const BUSY: SessionStatus[] = ['queued', 'running', 'waiting_decision'];
+/** A lead may delegate this many times per owner message, so two sessions can't loop forever. */
+const MAX_DELEGATIONS = 20;
+const OPEN_TASK: Task['status'][] = ['wait', 'run', 'working'];
 
 /** A role session runs in its role folder, so Claude Code loads that role's CLAUDE.md. */
 const sessionCwd = (project: Project, role: string | null) => (role ? path.join(project.workdir, role) : project.workdir);
+
+/** Roles a session may delegate to: the project's other roles. */
+const teamOf = (project: Project, role: string | null) => project.roles.filter((r) => r !== role);
 
 /** A role's CLAUDE.md body: its guidelines as `## name` sections, with its own text at descriptionIndex. */
 function composeRole(
@@ -247,7 +253,8 @@ export class Orchestrator implements SessionHost {
       .all();
   }
 
-  startSession(projectId: string, req: StartSessionRequest): Session {
+  /** `worker`: runs a delegated task, so it gets no `delegate` tool. */
+  startSession(projectId: string, req: StartSessionRequest, worker = false): Session {
     const project = this.getProject(projectId);
     if (req.role && !project.roles.includes(req.role)) {
       throw new HttpError(400, `project has no role "${req.role}"`);
@@ -265,15 +272,23 @@ export class Orchestrator implements SessionHost {
     };
     this.db.insert(sessions).values(session).run();
     this.output(session.id, 'user', { text: req.prompt });
-    this.manager.start(session.id, { workdir: sessionCwd(project, session.role), model: session.model, prompt: req.prompt });
+    this.manager.start(session.id, {
+      workdir: sessionCwd(project, session.role),
+      model: session.model,
+      prompt: req.prompt,
+      team: worker ? undefined : teamOf(project, session.role),
+    });
     return session;
   }
 
-  /** Idle sessions take the message directly; interrupted, errored or terminated ones are resumed with it. */
-  sendMessage(sessionId: string, text: string): void {
+  /**
+   * Idle sessions take the message directly; interrupted, errored or terminated ones are resumed with it.
+   * `as`: how the console shows it; delegation results are `system`.
+   */
+  sendMessage(sessionId: string, text: string, as: MessageRole = 'user'): void {
     const session = this.getSession(sessionId);
     if (session.status === 'idle') {
-      this.output(sessionId, 'user', { text });
+      this.output(sessionId, as, { text });
       this.manager.send(sessionId, text);
       return;
     }
@@ -283,13 +298,19 @@ export class Orchestrator implements SessionHost {
     if (!session.claudeSessionId) throw new HttpError(409, 'Session cannot be resumed: it never started');
     const project = this.getProject(session.projectId);
     this.db.update(sessions).set({ endedAt: null }).where(eq(sessions.id, sessionId)).run();
-    this.output(sessionId, 'user', { text });
+    this.output(sessionId, as, { text });
+    const worker = !!this.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.sessionId, sessionId), isNotNull(tasks.delegatedBy)))
+      .get();
     this.manager.start(sessionId, {
       workdir: sessionCwd(project, session.role),
       model: session.model,
       prompt: text,
       resume: session.claudeSessionId,
       priorCostUsd: session.costUsd,
+      team: worker ? undefined : teamOf(project, session.role),
     });
   }
 
@@ -298,7 +319,8 @@ export class Orchestrator implements SessionHost {
     this.manager.interrupt(sessionId);
     this.expireDecisions(sessionId);
     this.setStatus(sessionId, 'idle');
-    this.finishTask(sessionId, 'failed');
+    this.cancelDelegations(sessionId);
+    this.finishTask(sessionId, 'failed', 'Interrupted by the owner.');
   }
 
   terminate(sessionId: string): void {
@@ -308,7 +330,8 @@ export class Orchestrator implements SessionHost {
     this.expireDecisions(sessionId);
     this.db.update(sessions).set({ endedAt: now() }).where(eq(sessions.id, sessionId)).run();
     this.setStatus(sessionId, 'terminated');
-    this.finishTask(sessionId, 'failed');
+    this.cancelDelegations(sessionId);
+    this.finishTask(sessionId, 'failed', 'Terminated by the owner.');
   }
 
   /** Stops every live Claude process. Statuses are left as-is; the next startup marks them interrupted. */
@@ -343,6 +366,8 @@ export class Orchestrator implements SessionHost {
       groupId: null,
       position: 0,
       sessionId: null,
+      delegatedBy: null,
+      report: null,
       createdAt: now(),
     };
     this.db.insert(tasks).values(task).run();
@@ -363,9 +388,9 @@ export class Orchestrator implements SessionHost {
     const task = this.getTask(id);
     if (task.status === 'working' || task.status === 'done') throw new HttpError(409, `Task is ${task.status}`);
     const sessionId = task.status === 'failed' ? null : task.sessionId;
-    this.db.update(tasks).set({ status, sessionId }).where(eq(tasks.id, id)).run();
+    this.db.update(tasks).set({ status, sessionId, report: null }).where(eq(tasks.id, id)).run();
     this.tasksChanged();
-    return { ...task, status, sessionId };
+    return { ...task, status, sessionId, report: null };
   }
 
   runGroup(groupId: string): void {
@@ -471,8 +496,58 @@ export class Orchestrator implements SessionHost {
     const session = this.getSession(sessionId);
     this.db.update(sessions).set({ costUsd: session.costUsd + r.costUsd }).where(eq(sessions.id, sessionId)).run();
     this.setStatus(sessionId, 'idle');
-    this.bus.emit({ type: 'task_done', sessionId, projectId: session.projectId, ...r });
-    this.finishTask(sessionId, 'done');
+    const worker = this.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, 'working'), isNotNull(tasks.delegatedBy)))
+      .get();
+    const pending = this.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.delegatedBy, sessionId))
+      .all()
+      .some((t) => OPEN_TASK.includes(t.status) || t.report !== null);
+    this.bus.emit({ type: 'task_done', sessionId, projectId: session.projectId, ...r, intermediate: !!worker || pending });
+    this.finishTask(sessionId, 'done', r.result);
+  }
+
+  /** Queues `instructions` as a task for `role`, run in that role's session; the result goes back to the lead. */
+  delegate(sessionId: string, role: string, instructions: string): string {
+    const lead = this.getSession(sessionId);
+    const project = this.getProject(lead.projectId);
+    const mine = this.db.select().from(tasks).where(eq(tasks.delegatedBy, sessionId)).all();
+    if (this.db.select().from(tasks).where(and(eq(tasks.sessionId, sessionId), isNotNull(tasks.delegatedBy))).get()) {
+      throw new HttpError(409, 'A session doing delegated work cannot delegate further.');
+    }
+    if (!teamOf(project, lead.role).includes(role)) throw new HttpError(400, `Unknown role "${role}".`);
+    const lastOwnerMessage = this.db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')))
+      .orderBy(desc(messages.seq))
+      .get();
+    if (mine.filter((t) => t.createdAt >= (lastOwnerMessage?.createdAt ?? '')).length >= MAX_DELEGATIONS) {
+      throw new HttpError(409, `Delegation limit (${MAX_DELEGATIONS}) reached. Stop and report your progress to the owner.`);
+    }
+    const task: Task = {
+      id: randomUUID(),
+      projectId: project.id,
+      role,
+      name: `${role}: ${instructions.split('\n')[0]!.slice(0, 80)}`,
+      content: instructions,
+      parallel: false,
+      status: 'run',
+      // All of a lead's delegations form one group: they run in order and each role reuses its session.
+      groupId: sessionId,
+      position: mine.length,
+      sessionId: null,
+      delegatedBy: sessionId,
+      report: null,
+      createdAt: now(),
+    };
+    this.db.insert(tasks).values(task).run();
+    this.tasksChanged();
+    return `Queued for ${role} (task ${task.id}). End your turn; the result will arrive as a message.`;
   }
 
   setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
@@ -498,7 +573,7 @@ export class Orchestrator implements SessionHost {
     this.setStatus(sessionId, 'error');
     this.bus.emit({ type: 'session_error', sessionId, error });
     // A turn cut off by a usage limit goes back to `run` and continues in the same session after the reset.
-    this.finishTask(sessionId, this.pausedUntil ? 'run' : 'failed');
+    this.finishTask(sessionId, this.pausedUntil ? 'run' : 'failed', `Error: ${error}`);
   }
 
   // ---- internals ----
@@ -525,15 +600,19 @@ export class Orchestrator implements SessionHost {
     this.scheduleTasks();
   }
 
-  /** Called when a session's turn ends: its working task (if any) moves to `status`. */
-  private finishTask(sessionId: string, status: 'done' | 'failed' | 'run'): void {
+  /**
+   * Called when a session's turn ends: its working task (if any) moves to `status`.
+   * A finished delegated task keeps `report` until it is delivered to its lead.
+   */
+  private finishTask(sessionId: string, status: 'done' | 'failed' | 'run', report?: string): void {
     const task = this.db
       .select()
       .from(tasks)
       .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, 'working')))
       .get();
     if (task) {
-      this.db.update(tasks).set({ status }).where(eq(tasks.id, task.id)).run();
+      const withReport = task.delegatedBy && status !== 'run' ? { report: report ?? '' } : {};
+      this.db.update(tasks).set({ status, ...withReport }).where(eq(tasks.id, task.id)).run();
       this.bus.emit({ type: 'tasks_changed' });
     }
     this.scheduleTasks();
@@ -562,12 +641,14 @@ export class Orchestrator implements SessionHost {
 
   private scheduleOnce(): void {
     if (this.pausedUntil) return;
+    this.deliverReports();
     const all = this.db.select().from(tasks).orderBy(asc(tasks.createdAt)).all();
     const busyProjects = new Set(all.filter((t) => t.status === 'working' && !t.parallel).map((t) => t.projectId));
     for (const task of all) {
       if (task.status !== 'run') continue;
       const earlier = task.groupId ? all.filter((t) => t.groupId === task.groupId && t.position < task.position) : [];
-      if (earlier.some((t) => t.status !== 'done')) continue;
+      // A failed delegation doesn't block the lead's later ones: the lead is told and decides.
+      if (earlier.some((t) => t.status !== 'done' && !(t.delegatedBy && t.status === 'failed'))) continue;
       if (!task.parallel && busyProjects.has(task.projectId)) continue;
       // Own session: cut off by a limit or restart. Otherwise the nearest earlier group member with the same project+role.
       const reuse =
@@ -587,13 +668,51 @@ export class Orchestrator implements SessionHost {
         this.sendMessage(reuse, task.sessionId ? CONTINUE_PROMPT : task.content);
       } else {
         this.db.update(tasks).set({ status: 'working' }).where(eq(tasks.id, task.id)).run();
-        const session = this.startSession(task.projectId, { prompt: task.content, role: task.role ?? undefined });
+        const session = this.startSession(task.projectId, { prompt: task.content, role: task.role ?? undefined }, !!task.delegatedBy);
         this.db.update(tasks).set({ sessionId: session.id }).where(eq(tasks.id, task.id)).run();
       }
     } catch {
       this.db.update(tasks).set({ status: 'failed' }).where(eq(tasks.id, task.id)).run();
     }
     this.bus.emit({ type: 'tasks_changed' });
+  }
+
+  /** Sends finished delegations' results to each lead that is idle (or interrupted by a restart), one message per lead. */
+  private deliverReports(): void {
+    const waiting = this.db.select().from(tasks).where(isNotNull(tasks.report)).orderBy(asc(tasks.position)).all();
+    for (const leadId of new Set(waiting.map((t) => t.delegatedBy!))) {
+      if (!['idle', 'interrupted'].includes(this.getSession(leadId).status)) continue;
+      const reports = waiting.filter((t) => t.delegatedBy === leadId);
+      this.db.update(tasks).set({ report: null }).where(inArray(tasks.id, reports.map((t) => t.id))).run();
+      const body = reports.map((t) => `## ${t.role} — ${t.status} ("${t.name}")\n\n${t.report}`).join('\n\n');
+      try {
+        this.sendMessage(leadId, `Delegation results:\n\n${body}`, 'system');
+      } catch {
+        // never started, so it can't be resumed; the results stay visible on the Tasks page
+      }
+      this.bus.emit({ type: 'tasks_changed' });
+    }
+  }
+
+  /** The lead was interrupted or terminated: its open delegations fail, a running one is stopped, nothing is reported. */
+  private cancelDelegations(leadId: string): void {
+    const open = this.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.delegatedBy, leadId), inArray(tasks.status, OPEN_TASK)))
+      .all();
+    for (const t of open) {
+      if (t.status === 'working' && t.sessionId) {
+        this.manager.interrupt(t.sessionId);
+        this.expireDecisions(t.sessionId);
+        this.setStatus(t.sessionId, 'idle');
+      }
+    }
+    if (open.length) {
+      this.db.update(tasks).set({ status: 'failed' }).where(inArray(tasks.id, open.map((t) => t.id))).run();
+    }
+    this.db.update(tasks).set({ report: null }).where(eq(tasks.delegatedBy, leadId)).run();
+    if (open.length) this.bus.emit({ type: 'tasks_changed' });
   }
 
   getProject(id: string): Project {

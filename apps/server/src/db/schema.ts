@@ -77,5 +77,7 @@ export const tasks = sqliteTable('tasks', {
   groupId: text('group_id'),
   position: integer('position').notNull().default(0),
   sessionId: text('session_id'),
+  delegatedBy: text('delegated_by'),
+  report: text('report'),
   createdAt: text('created_at').notNull(),
 });

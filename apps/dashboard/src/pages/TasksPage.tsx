@@ -101,6 +101,11 @@ export function TasksPage() {
             {t.parallel && <span className="chip">parallel</span>}
           </span>
           <span className="actions">
+            {t.delegatedBy && (
+              <a className="link" href={`#/sessions/${t.delegatedBy}`}>
+                Lead →
+              </a>
+            )}
             {t.sessionId && (
               <a className="link" href={`#/sessions/${t.sessionId}`}>
                 Session →
