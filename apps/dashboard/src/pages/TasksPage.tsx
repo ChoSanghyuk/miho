@@ -65,8 +65,13 @@ export function TasksPage() {
     }
   }
   for (const e of entries) e.tasks.sort((a, b) => a.position - b.position);
-  const groups = entries.filter((e) => e.groupId);
-  const solos = entries.filter((e) => !e.groupId).map((e) => e.tasks[0]!);
+  // A solo task, or a group once all its tasks are done, moves to History.
+  const [tab, setTab] = useState<'active' | 'history'>('active');
+  const isFinished = (e: (typeof entries)[number]) => e.tasks.every((t) => t.status === 'done');
+  const active = entries.filter((e) => !isFinished(e));
+  const history = entries.filter(isFinished).reverse();
+  const groups = active.filter((e) => e.groupId);
+  const solos = active.filter((e) => !e.groupId).map((e) => e.tasks[0]!);
 
   const row = (t: Task) => {
     const project = projectById.get(t.projectId);
@@ -131,47 +136,79 @@ export function TasksPage() {
   return (
     <>
       <h1>Todos</h1>
-      <h2>New task</h2>
-      <CreateTaskForm projects={projects.data ?? []} onCreated={refresh} />
-
-      {tasks.data?.pausedUntil && (
-        <p className="card banner" role="status">
-          Usage limit reached. Tasks resume at {new Date(tasks.data.pausedUntil).toLocaleString()}.
-        </p>
-      )}
+      <div className="segmented" role="radiogroup" aria-label="View">
+        <label className="check">
+          <input type="radio" checked={tab === 'active'} onChange={() => setTab('active')} /> Active
+        </label>
+        <label className="check">
+          <input type="radio" checked={tab === 'history'} onChange={() => setTab('history')} /> History ({history.length})
+        </label>
+      </div>
       {error && <p className="error">{error.message}</p>}
-      <p className="hint">
-        Drag a waiting task onto another task to put it in front of that task in one group, onto a group header to append it,
-        or onto Ungrouped to take it out. Tasks in a group run in order.
-      </p>
 
-      {groups.map((g) => (
-        <section key={g.groupId} className="card group">
-          <div className={`row group-head ${over === g.groupId ? 'drop-over' : ''}`} {...dropProps(g.groupId!, { groupId: g.groupId! })}>
-            <span className="eyebrow">Group · runs in order</span>
-            <span className="muted mono">{g.tasks.length} tasks</span>
-            <span className="actions grow-right">
-              <button
-                className="small"
-                type="button"
-                disabled={!g.tasks.some((t) => t.status === 'wait' || t.status === 'failed')}
-                onClick={() => runGroup.mutate(g.groupId!)}
-              >
-                Run all
-              </button>
-            </span>
-          </div>
-          <ol className="list">
-            {g.tasks.map(row)}
-          </ol>
-        </section>
-      ))}
+      {tab === 'history' && (
+        <ul className="list">
+          {history.length === 0 && <li className="muted">No completed tasks yet.</li>}
+          {history.map((e) =>
+            e.groupId ? (
+              <li key={e.groupId} className="card group">
+                <div className="row group-head">
+                  <span className="eyebrow">Group</span>
+                  <span className="muted mono">{e.tasks.length} tasks</span>
+                </div>
+                <ol className="list">{e.tasks.map(row)}</ol>
+              </li>
+            ) : (
+              row(e.tasks[0]!)
+            ),
+          )}
+        </ul>
+      )}
 
-      <h2>Ungrouped</h2>
-      <ul className={`list drop-zone ${over === 'ungrouped' ? 'drop-over' : ''}`} {...dropProps('ungrouped', {})}>
-        {solos.length === 0 && <li className="muted">No ungrouped tasks.</li>}
-        {solos.map(row)}
-      </ul>
+      {tab === 'active' && (
+        <>
+          <h2>New task</h2>
+          <CreateTaskForm projects={projects.data ?? []} onCreated={refresh} />
+
+          {tasks.data?.pausedUntil && (
+            <p className="card banner" role="status">
+              Usage limit reached. Tasks resume at {new Date(tasks.data.pausedUntil).toLocaleString()}.
+            </p>
+          )}
+          <p className="hint">
+            Drag a waiting task onto another task to put it in front of that task in one group, onto a group header to append it,
+            or onto Ungrouped to take it out. Tasks in a group run in order.
+          </p>
+
+          {groups.map((g) => (
+            <section key={g.groupId} className="card group">
+              <div className={`row group-head ${over === g.groupId ? 'drop-over' : ''}`} {...dropProps(g.groupId!, { groupId: g.groupId! })}>
+                <span className="eyebrow">Group · runs in order</span>
+                <span className="muted mono">{g.tasks.length} tasks</span>
+                <span className="actions grow-right">
+                  <button
+                    className="small"
+                    type="button"
+                    disabled={!g.tasks.some((t) => t.status === 'wait' || t.status === 'failed')}
+                    onClick={() => runGroup.mutate(g.groupId!)}
+                  >
+                    Run all
+                  </button>
+                </span>
+              </div>
+              <ol className="list">
+                {g.tasks.map(row)}
+              </ol>
+            </section>
+          ))}
+
+          <h2>Ungrouped</h2>
+          <ul className={`list drop-zone ${over === 'ungrouped' ? 'drop-over' : ''}`} {...dropProps('ungrouped', {})}>
+            {solos.length === 0 && <li className="muted">No ungrouped tasks.</li>}
+            {solos.map(row)}
+          </ul>
+        </>
+      )}
     </>
   );
 }

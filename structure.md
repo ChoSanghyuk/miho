@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Tasks (todos, drag-and-drop groups), Decisions, Roles, Guidelines, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
 │     └─ styles.css           design tokens (CSS variables, light/dark) and all styles; fonts are linked in index.html
 ```
