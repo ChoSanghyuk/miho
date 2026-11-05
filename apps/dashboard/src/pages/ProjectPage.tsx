@@ -42,14 +42,62 @@ export function ProjectPage({ projectName }: { projectName: string }) {
       </p>
       <h1>{projectName}</h1>
       {projects.data && !project && <p className="error">No project named "{projectName}".</p>}
-      <p className="muted mono">{project?.workdir}</p>
+      {project && (
+        <p className="path page-path" title={project.workdir}>
+          <bdi>{project.workdir}</bdi>
+        </p>
+      )}
+
+      <form
+        className="card stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          start.mutate();
+        }}
+      >
+        <label className="eyebrow field-label" htmlFor="prompt">
+          New session
+        </label>
+        <textarea
+          id="prompt"
+          rows={3}
+          placeholder="What should Claude do?"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          required
+        />
+        <div className="actions end">
+          {!!project?.roles.length && (
+            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
+              <option value="">Project root</option>
+              {project.roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          )}
+          <button disabled={start.isPending || !project}>Start session</button>
+        </div>
+        {start.error && <p className="error">{start.error.message}</p>}
+      </form>
 
       {project && (
-        <div className="card">
-          <p>
-            <strong>Roles:</strong>{' '}
-            {project.roles.length ? project.roles.join(', ') : <span className="muted">none (single session)</span>}
-          </p>
+        <div className="card stack">
+          <div className="row">
+            <span className="eyebrow">Roles</span>
+            {project.roles.length ? (
+              <span className="chips">
+                {project.roles.map((r) => (
+                  <span key={r} className="chip">
+                    {r}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="muted">none (single session)</span>
+            )}
+          </div>
           <div className="form-row">
             <select value={predefined} onChange={(e) => setPredefined(e.target.value)} aria-label="Predefined role">
               <option value="">Predefined role…</option>
@@ -72,7 +120,7 @@ export function ProjectPage({ projectName }: { projectName: string }) {
               Add role
             </button>
           </div>
-          <div className="form-row" style={{ marginTop: 8 }}>
+          <div className="form-row">
             <input placeholder="Role for this project only" value={newName} onChange={(e) => setNewName(e.target.value)} />
             <input placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
             <button
@@ -88,48 +136,20 @@ export function ProjectPage({ projectName }: { projectName: string }) {
         </div>
       )}
 
-      <form
-        className="card"
-        onSubmit={(e) => {
-          e.preventDefault();
-          start.mutate();
-        }}
-      >
-        <textarea
-          rows={3}
-          placeholder="What should Claude do?"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          required
-        />
-        <div className="actions">
-          {!!project?.roles.length && (
-            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
-              <option value="">Project root</option>
-              {project.roles.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          )}
-          <button disabled={start.isPending || !project}>Start session</button>
-        </div>
-        {start.error && <p className="error">{start.error.message}</p>}
-      </form>
-
       <h2>Sessions</h2>
-      {sessions.data?.length === 0 && <p className="muted">No sessions yet.</p>}
+      {sessions.data?.length === 0 && <p className="empty">No sessions yet.</p>}
       <ul className="list">
         {[...(sessions.data ?? [])].reverse().map((s) => (
           <li key={s.id}>
-            <a href={`#/sessions/${s.id}`} className="card row">
+            <a href={`#/sessions/${s.id}`} className="card session-row">
               <StatusPill status={s.status} />
               <span className="mono">{s.id.slice(0, 8)}</span>
-              {s.role && <strong>{s.role}</strong>}
-              <span className="muted">{s.model}</span>
-              <span className="muted">${s.costUsd.toFixed(4)}</span>
-              <span className="muted grow-right">{new Date(s.startedAt).toLocaleString()}</span>
+              <span className="who">
+                {s.role && <strong>{s.role}</strong>}
+                <span className="muted mono">{s.model}</span>
+                <span className="muted mono">${s.costUsd.toFixed(4)}</span>
+              </span>
+              <span className="when">{new Date(s.startedAt).toLocaleString()}</span>
             </a>
           </li>
         ))}

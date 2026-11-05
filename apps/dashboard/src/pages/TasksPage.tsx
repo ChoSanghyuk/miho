@@ -54,10 +54,15 @@ export function TasksPage() {
 
   // Groups and solo tasks, in order of their first task's creation.
   const entries: { groupId: string | null; tasks: Task[] }[] = [];
+  const entryByGroup = new Map<string, (typeof entries)[number]>();
   for (const t of tasks.data?.tasks ?? []) {
-    const group = t.groupId && entries.find((e) => e.groupId === t.groupId);
+    const group = t.groupId ? entryByGroup.get(t.groupId) : undefined;
     if (group) group.tasks.push(t);
-    else entries.push({ groupId: t.groupId, tasks: [t] });
+    else {
+      const entry = { groupId: t.groupId, tasks: [t] };
+      entries.push(entry);
+      if (t.groupId) entryByGroup.set(t.groupId, entry);
+    }
   }
   for (const e of entries) e.tasks.sort((a, b) => a.position - b.position);
   const groups = entries.filter((e) => e.groupId);
@@ -80,33 +85,39 @@ export function TasksPage() {
         }}
         {...dropProps(t.id, { before: t.id }, !t.parallel && dragId !== t.id)}
       >
-        <div className="row">
+        <div className="task-head">
           <span className={`pill pill-task-${t.status}`}>{STATUS_LABELS[t.status]}</span>
-          <strong>{t.name}</strong>
-          <span className="muted">
-            {project?.name ?? '?'}
-            {t.role ? ` / ${t.role}` : ''}
+          <span className="task-title">
+            <strong>{t.name}</strong>
+            <span className="muted">
+              {project?.name ?? '?'}
+              {t.role ? ` / ${t.role}` : ''}
+            </span>
+            {t.parallel && <span className="chip">parallel</span>}
           </span>
-          {t.parallel && <span className="muted">parallel</span>}
-          <span className="actions grow-right" style={{ marginTop: 0 }}>
-            {t.sessionId && <a href={`#/sessions/${t.sessionId}`}>Session</a>}
+          <span className="actions">
+            {t.sessionId && (
+              <a className="link" href={`#/sessions/${t.sessionId}`}>
+                Session →
+              </a>
+            )}
             {t.status === 'wait' && (
-              <button type="button" onClick={() => setStatus.mutate({ id: t.id, status: 'run' })}>
+              <button type="button" className="small" onClick={() => setStatus.mutate({ id: t.id, status: 'run' })}>
                 Run
               </button>
             )}
             {t.status === 'run' && (
-              <button type="button" className="secondary" onClick={() => setStatus.mutate({ id: t.id, status: 'wait' })}>
+              <button type="button" className="secondary small" onClick={() => setStatus.mutate({ id: t.id, status: 'wait' })}>
                 Wait
               </button>
             )}
             {t.status === 'failed' && (
-              <button type="button" onClick={() => setStatus.mutate({ id: t.id, status: 'run' })}>
+              <button type="button" className="small" onClick={() => setStatus.mutate({ id: t.id, status: 'run' })}>
                 Retry
               </button>
             )}
             {t.status !== 'working' && (
-              <button type="button" className="danger" onClick={() => remove.mutate(t.id)}>
+              <button type="button" className="danger small" onClick={() => remove.mutate(t.id)}>
                 Delete
               </button>
             )}
@@ -120,26 +131,28 @@ export function TasksPage() {
   return (
     <>
       <h1>Todos</h1>
+      <h2>New task</h2>
       <CreateTaskForm projects={projects.data ?? []} onCreated={refresh} />
 
       {tasks.data?.pausedUntil && (
-        <p className="card banner">
+        <p className="card banner" role="status">
           Usage limit reached. Tasks resume at {new Date(tasks.data.pausedUntil).toLocaleString()}.
         </p>
       )}
       {error && <p className="error">{error.message}</p>}
-      <p className="muted">
+      <p className="hint">
         Drag a waiting task onto another task to put it in front of that task in one group, onto a group header to append it,
         or onto Ungrouped to take it out. Tasks in a group run in order.
       </p>
 
       {groups.map((g) => (
         <section key={g.groupId} className="card group">
-          <div className={`row ${over === g.groupId ? 'drop-over' : ''}`} {...dropProps(g.groupId!, { groupId: g.groupId! })}>
-            <strong>Group</strong>
-            <span className="muted">{g.tasks.length} tasks</span>
-            <span className="actions grow-right" style={{ marginTop: 0 }}>
+          <div className={`row group-head ${over === g.groupId ? 'drop-over' : ''}`} {...dropProps(g.groupId!, { groupId: g.groupId! })}>
+            <span className="eyebrow">Group · runs in order</span>
+            <span className="muted mono">{g.tasks.length} tasks</span>
+            <span className="actions grow-right">
               <button
+                className="small"
                 type="button"
                 disabled={!g.tasks.some((t) => t.status === 'wait' || t.status === 'failed')}
                 onClick={() => runGroup.mutate(g.groupId!)}
@@ -148,7 +161,7 @@ export function TasksPage() {
               </button>
             </span>
           </div>
-          <ol className="list" style={{ marginTop: 8 }}>
+          <ol className="list">
             {g.tasks.map(row)}
           </ol>
         </section>
@@ -182,7 +195,7 @@ function CreateTaskForm({ projects, onCreated }: { projects: Project[]; onCreate
 
   return (
     <form
-      className="card"
+      className="card stack"
       onSubmit={(e) => {
         e.preventDefault();
         create.mutate();
@@ -219,13 +232,12 @@ function CreateTaskForm({ projects, onCreated }: { projects: Project[]; onCreate
       </div>
       <textarea
         rows={3}
-        style={{ marginTop: 8 }}
         placeholder="What should Claude do?"
         value={content}
         onChange={(e) => setContent(e.target.value)}
         required
       />
-      <div className="actions">
+      <div className="actions split">
         <label className="check">
           <input type="checkbox" checked={parallel} onChange={(e) => setParallel(e.target.checked)} /> Can run in parallel
         </label>

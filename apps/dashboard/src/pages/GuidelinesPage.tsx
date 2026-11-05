@@ -21,8 +21,9 @@ export function GuidelinesPage() {
   return (
     <>
       <h1>Guidelines</h1>
+      <h2>New guideline</h2>
       <form
-        className="card"
+        className="card stack"
         onSubmit={(e) => {
           e.preventDefault();
           create.mutate();
@@ -34,7 +35,6 @@ export function GuidelinesPage() {
           placeholder="Content under the heading"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          style={{ marginTop: 8 }}
         />
         <div className="actions">
           <button disabled={create.isPending}>Add guideline</button>
@@ -42,7 +42,8 @@ export function GuidelinesPage() {
         {create.error && <p className="error">{create.error.message}</p>}
       </form>
 
-      {guidelines.data?.length === 0 && <p className="muted">No guidelines yet.</p>}
+      <h2>Shared guidelines</h2>
+      {guidelines.data?.length === 0 && <p className="empty">No guidelines yet.</p>}
       <ul className="list">
         {guidelines.data?.map((g) => (
           <GuidelineItem key={g.id} guideline={g} />
@@ -65,9 +66,9 @@ function GuidelineItem({ guideline }: { guideline: Guideline }) {
   const dirty = name !== guideline.name || description !== guideline.description;
 
   return (
-    <li className="card">
+    <li className="card stack">
       <input value={name} onChange={(e) => setName(e.target.value)} />
-      <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} style={{ marginTop: 8 }} />
+      <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
       <div className="actions">
         <button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
           Save

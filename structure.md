@@ -64,7 +64,7 @@ ai_orchestrator/
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
 │     ├─ pages/               Projects (create, single or roles), Project (start session, add roles), Session (console), Tasks (todos, drag-and-drop groups), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
-│     └─ styles.css           CSS variables, light/dark
+│     └─ styles.css           design tokens (CSS variables, light/dark) and all styles; fonts are linked in index.html
 ```
 
 Generated at runtime and git-ignored: `orchestrator.sqlite*`, `logs/`, `backups/`, `dist/`.

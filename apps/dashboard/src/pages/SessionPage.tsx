@@ -40,21 +40,23 @@ export function SessionPage({ sessionId }: { sessionId: string }) {
         <h1 className="mono">{sessionId.slice(0, 8)}</h1>
         {status && <StatusPill status={status} />}
         {s && (
-          <span className="muted">
+          <span className="meta">
+            {s.role && `${s.role} · `}
             {s.model} · ${s.costUsd.toFixed(4)}
           </span>
         )}
-        <span className="grow-right" />
-        <button className="secondary" disabled={!busy || interrupt.isPending} onClick={() => interrupt.mutate()}>
-          Interrupt
-        </button>
-        <button
-          className="danger"
-          disabled={!s || status === 'terminated' || terminate.isPending}
-          onClick={() => terminate.mutate()}
-        >
-          Terminate
-        </button>
+        <span className="actions grow-right">
+          <button className="secondary small" disabled={!busy || interrupt.isPending} onClick={() => interrupt.mutate()}>
+            Interrupt
+          </button>
+          <button
+            className="danger small"
+            disabled={!s || status === 'terminated' || terminate.isPending}
+            onClick={() => terminate.mutate()}
+          >
+            Terminate
+          </button>
+        </span>
       </div>
 
       <div className="console">

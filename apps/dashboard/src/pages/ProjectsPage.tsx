@@ -53,8 +53,9 @@ export function ProjectsPage() {
   return (
     <>
       <h1>Projects</h1>
+      <h2>New project</h2>
       <form
-        className="card"
+        className="card stack"
         onSubmit={(e) => {
           e.preventDefault();
           create.mutate();
@@ -69,7 +70,7 @@ export function ProjectsPage() {
             required
           />
         </div>
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="segmented" role="radiogroup" aria-label="Sessions">
           <label className="check">
             <input type="radio" checked={!multi} onChange={() => setMulti(false)} /> Single session
           </label>
@@ -79,7 +80,7 @@ export function ProjectsPage() {
         </div>
 
         {multi && (
-          <div style={{ marginTop: 8 }}>
+          <div>
             {options.length === 0 && <p className="muted">No roles yet. Define them under Roles, or add one below.</p>}
             {options.map((r) => (
               <label key={r.name} className="check">
@@ -88,7 +89,7 @@ export function ProjectsPage() {
                 <span className="muted">{r.description}</span>
               </label>
             ))}
-            <div className="form-row" style={{ marginTop: 8 }}>
+            <div className="form-row">
               <input placeholder="Role for this project only" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
               <input placeholder="Description" value={extraDesc} onChange={(e) => setExtraDesc(e.target.value)} />
               <button
@@ -115,14 +116,25 @@ export function ProjectsPage() {
         {create.error && <p className="error">{create.error.message}</p>}
       </form>
 
-      {projects.data?.length === 0 && <p className="muted">No projects yet.</p>}
+      <h2>All projects</h2>
+      {projects.data?.length === 0 && <p className="empty">No projects yet.</p>}
       <ul className="list">
         {projects.data?.map((p) => (
           <li key={p.id}>
-            <a href={`#/projects/${encodeURIComponent(p.name)}`} className="card row">
+            <a href={`#/projects/${encodeURIComponent(p.name)}`} className="card project-row">
               <strong>{p.name}</strong>
-              <span className="muted mono">{p.workdir}</span>
-              {p.roles.length > 0 && <span className="muted grow-right">{p.roles.join(', ')}</span>}
+              <span className="path" title={p.workdir}>
+                <bdi>{p.workdir}</bdi>
+              </span>
+              {p.roles.length > 0 && (
+                <span className="chips">
+                  {p.roles.map((r) => (
+                    <span key={r} className="chip">
+                      {r}
+                    </span>
+                  ))}
+                </span>
+              )}
             </a>
           </li>
         ))}

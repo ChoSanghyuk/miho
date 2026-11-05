@@ -21,9 +21,11 @@ export function RolesPage() {
   return (
     <>
       <h1>Roles</h1>
+      <h2>New role</h2>
       <RoleEditor key={formKey} submitLabel="Add role" pending={create.isPending} error={create.error} onSubmit={create.mutate} />
 
-      {roles.data?.length === 0 && <p className="muted">No roles yet.</p>}
+      <h2>Defined roles</h2>
+      {roles.data?.length === 0 && <p className="empty">No roles yet.</p>}
       <ul className="list">
         {roles.data?.map((r) => (
           <li key={r.id}>

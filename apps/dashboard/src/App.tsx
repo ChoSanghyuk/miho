@@ -35,17 +35,20 @@ function Shell() {
   const connected = useEvents();
   const [section, id] = useRoute();
   const pending = useQuery({ queryKey: ['decisions', 'pending'], queryFn: () => api.decisions('pending') });
+  // Project and session pages live under Projects in the nav.
+  const active = !section || section === 'sessions' ? 'projects' : section;
+  const current = (s: string) => (active === s ? 'page' : undefined);
 
   return (
     <div className="shell">
       <header className="topbar">
-        <a href="#/" className="brand">AI Orchestrator</a>
+        <a href="#/" className="brand">Orchestrator</a>
         <nav>
-          <a href="#/">Projects</a>
-          <a href="#/tasks">Todos</a>
-          <a href="#/roles">Roles</a>
-          <a href="#/guidelines">Guidelines</a>
-          <a href="#/decisions">
+          <a href="#/" aria-current={current('projects')}>Projects</a>
+          <a href="#/tasks" aria-current={current('tasks')}>Todos</a>
+          <a href="#/roles" aria-current={current('roles')}>Roles</a>
+          <a href="#/guidelines" aria-current={current('guidelines')}>Guidelines</a>
+          <a href="#/decisions" aria-current={current('decisions')}>
             Decisions
             {!!pending.data?.length && <span className="badge">{pending.data.length}</span>}
           </a>

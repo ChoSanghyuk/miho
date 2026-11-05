@@ -9,7 +9,9 @@ export function LoginPage() {
 
   return (
     <div className="shell login">
-      <h1>AI Orchestrator</h1>
+      <p className="eyebrow">AI Orchestrator</p>
+      <h1>Sign in</h1>
+      <p className="lede">Paste the owner token to open the dashboard.</p>
       <form
         className="form-row"
         onSubmit={(e) => {

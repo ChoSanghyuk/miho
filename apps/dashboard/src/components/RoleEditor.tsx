@@ -55,7 +55,7 @@ export function RoleEditor(props: {
 
   return (
     <form
-      className="card"
+      className="card stack"
       onSubmit={(e) => {
         e.preventDefault();
         props.onSubmit({ name, description, guidelineIds, descriptionIndex });
@@ -67,12 +67,11 @@ export function RoleEditor(props: {
         placeholder="Role description (its own text in CLAUDE.md)"
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        style={{ marginTop: 8 }}
       />
 
       {!!guidelines.data?.length && (
-        <div style={{ marginTop: 8 }}>
-          <span className="muted">Guidelines</span>
+        <div>
+          <span className="eyebrow field-label">Guidelines</span>
           {guidelines.data.map((g) => (
             <label key={g.id} className="check">
               <input type="checkbox" checked={parts.includes(g.id)} onChange={() => toggle(g.id)} />
@@ -83,8 +82,8 @@ export function RoleEditor(props: {
       )}
 
       {parts.length > 1 && (
-        <div style={{ marginTop: 8 }}>
-          <span className="muted">Order in CLAUDE.md</span>
+        <div>
+          <span className="eyebrow field-label">Order in CLAUDE.md</span>
           <ol className="order">
             {parts.map((p, i) => (
               <li key={p ?? 'own'}>
@@ -101,8 +100,8 @@ export function RoleEditor(props: {
         </div>
       )}
 
-      <details style={{ marginTop: 8 }}>
-        <summary className="muted">Preview CLAUDE.md</summary>
+      <details>
+        <summary className="link">Preview CLAUDE.md</summary>
         <pre>{`# Role: ${name}\n\n${compose(parts, description, byId)}`}</pre>
       </details>
 
