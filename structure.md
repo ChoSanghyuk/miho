@@ -4,7 +4,7 @@ The reference for anyone, human or AI, starting work on this repo. It describes 
 
 ## What this is
 
-A single-owner service that runs Claude Code sessions on the owner's machine:
+**MIHO** is a single-owner service that runs Claude Code sessions on the owner's machine:
 
 - **Sessions:** it creates them, relays the owner's commands to them, shows their output, and terminates them.
 - **Two front doors:** a web dashboard and a Telegram bot.

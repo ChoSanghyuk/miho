@@ -42,7 +42,7 @@ function Shell() {
   return (
     <div className="shell">
       <header className="topbar">
-        <a href="#/" className="brand">Orchestrator</a>
+        <a href="#/" className="brand">MIHO</a>
         <nav>
           <a href="#/" aria-current={current('projects')}>Projects</a>
           <a href="#/tasks" aria-current={current('tasks')}>Todos</a>

@@ -9,7 +9,7 @@ export function LoginPage() {
 
   return (
     <div className="shell login">
-      <p className="eyebrow">AI Orchestrator</p>
+      <p className="eyebrow">MIHO</p>
       <h1>Sign in</h1>
       <p className="lede">Paste the owner token to open the dashboard.</p>
       <form
