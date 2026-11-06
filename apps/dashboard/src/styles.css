@@ -139,6 +139,8 @@ a.card:hover { border-color: var(--border-strong); transform: translateY(-1px); 
 .form-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .form-row > input { flex: 1 1 200px; }
 .form-row > select { flex: 0 1 auto; }
+.role-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.role-form > textarea { grid-column: 1 / -1; grid-row: 2; }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .actions.end { justify-content: flex-end; }
 .actions.split { justify-content: space-between; }

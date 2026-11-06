@@ -89,9 +89,9 @@ export function ProjectsPage() {
                 <span className="muted">{r.description}</span>
               </label>
             ))}
-            <div className="form-row">
+            <div className="role-form">
               <input placeholder="Role for this project only" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
-              <input placeholder="Description" value={extraDesc} onChange={(e) => setExtraDesc(e.target.value)} />
+              <textarea rows={3} placeholder="Description" value={extraDesc} onChange={(e) => setExtraDesc(e.target.value)} />
               <button
                 type="button"
                 className="secondary"

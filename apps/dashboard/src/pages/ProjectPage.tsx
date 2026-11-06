@@ -128,9 +128,9 @@ export function ProjectPage({ projectName }: { projectName: string }) {
               Add role
             </button>
           </div>
-          <div className="form-row">
+          <div className="role-form">
             <input placeholder="Role for this project only" value={newName} onChange={(e) => setNewName(e.target.value)} />
-            <input placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+            <textarea rows={3} placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
             <button
               type="button"
               className="secondary"
