@@ -3,6 +3,7 @@ import type { SessionHost, SessionManager } from './types.js';
 /**
  * Stand-in until the Agent SDK integration lands. Echoes each prompt.
  * A prompt containing "[decision]" first asks for a Bash permission, to exercise the decision flow.
+ * A prompt containing "[question]" asks a multi-select question (options a, b, c).
  * A prompt containing "[limit]" hits a usage limit that resets 50 ms later.
  * A line "[delegate:<role>] <instructions>" calls the `delegate` tool (one per line).
  */
@@ -50,6 +51,19 @@ export class FakeSessionManager implements SessionManager {
         suffix = ` (permission: ${'behavior' in answer ? answer.behavior : answer.choice})`;
       } catch {
         return; // cancelled by interrupt or terminate
+      }
+      if (signal.aborted) return;
+    }
+
+    if (own.includes('[question]')) {
+      try {
+        const answer = await this.host.requestDecision(sessionId, {
+          kind: 'question',
+          payload: { question: 'Pick some', options: ['a', 'b', 'c'], multiSelect: true },
+        });
+        suffix += ` (answer: ${'choice' in answer ? answer.choice : answer.behavior})`;
+      } catch {
+        return;
       }
       if (signal.aborted) return;
     }

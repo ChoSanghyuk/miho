@@ -171,6 +171,23 @@ describe('backend core', () => {
     await t.app.close();
   });
 
+  test('a multi-select question takes several options or free text', async () => {
+    const t = await setup();
+    const project = await t.createProject('alpha');
+    await t.startSession(project.id, '[question]');
+    const needed = await t.waitFor((e) => e.type === 'decision_needed');
+    assert.ok(needed.type === 'decision_needed' && needed.decision.kind === 'question');
+    assert.equal(needed.decision.payload.multiSelect, true);
+    const id = needed.decision.id;
+
+    assert.equal((await t.req('POST', `/api/decisions/${id}`, { answer: { choice: '' } })).status, 400);
+    assert.equal((await t.req('POST', `/api/decisions/${id}`, { answer: { behavior: 'allow' } })).status, 400);
+    assert.equal((await t.req('POST', `/api/decisions/${id}`, { answer: { choice: 'a, c' } })).status, 200);
+    const done = await t.waitFor((e) => e.type === 'task_done');
+    assert.ok(done.type === 'task_done' && done.result.endsWith('(answer: a, c)'));
+    await t.app.close();
+  });
+
   test('interrupt expires the pending decision and leaves the session idle', async () => {
     const t = await setup();
     const project = await t.createProject('alpha');

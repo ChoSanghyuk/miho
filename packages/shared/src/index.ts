@@ -89,7 +89,9 @@ export type Decision = {
     }
   | {
       kind: 'question';
-      payload: { question: string; options: string[] };
+      /** `multiSelect`: several options may be picked. */
+      payload: { question: string; options: string[]; multiSelect?: boolean };
+      /** One option label, several joined with ", ", or the owner's own text. */
       answer: { choice: string } | null;
     }
 );

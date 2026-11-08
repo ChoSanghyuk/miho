@@ -28,7 +28,7 @@ const startSessionBody = z.object({
 });
 const sendMessageBody = z.object({ text: z.string().min(1) });
 const answerDecisionBody = z.object({
-  answer: z.union([z.object({ behavior: z.enum(['allow', 'deny']) }), z.object({ choice: z.string() })]),
+  answer: z.union([z.object({ behavior: z.enum(['allow', 'deny']) }), z.object({ choice: z.string().min(1) })]),
 });
 const createTaskBody = z.object({
   projectId: z.string().min(1),

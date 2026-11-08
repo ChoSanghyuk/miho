@@ -477,11 +477,9 @@ export class Orchestrator implements SessionHost {
     if (row.kind === 'permission' && !('behavior' in answer)) {
       throw new HttpError(400, 'Permission decisions take { behavior: "allow" | "deny" }');
     }
-    if (row.kind === 'question') {
-      const options = (row.payload as { options: string[] }).options;
-      if (!('choice' in answer) || !options.includes(answer.choice)) {
-        throw new HttpError(400, `Question decisions take { choice } from: ${options.join(', ')}`);
-      }
+    // A question takes any non-empty text: an option, several joined with ", ", or the owner's own words.
+    if (row.kind === 'question' && !('choice' in answer && answer.choice.trim())) {
+      throw new HttpError(400, 'Question decisions take { choice: string }');
     }
 
     this.db.update(decisions).set({ status: 'answered', answeredVia: via, answer }).where(eq(decisions.id, decisionId)).run();

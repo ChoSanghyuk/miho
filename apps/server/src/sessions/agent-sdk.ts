@@ -233,12 +233,16 @@ export class AgentSdkSessionManager implements SessionManager {
     return async (toolName, input) => {
       try {
         if (toolName === 'AskUserQuestion') {
-          const questions = (input.questions ?? []) as { question: string; options: { label: string }[] }[];
+          const questions = (input.questions ?? []) as {
+            question: string;
+            options: { label: string }[];
+            multiSelect?: boolean;
+          }[];
           const answers: Record<string, string> = {};
           for (const q of questions) {
             const answer = await this.host.requestDecision(sessionId, {
               kind: 'question',
-              payload: { question: q.question, options: q.options.map((o) => o.label) },
+              payload: { question: q.question, options: q.options.map((o) => o.label), multiSelect: q.multiSelect === true },
             });
             if ('choice' in answer) answers[q.question] = answer.choice;
           }

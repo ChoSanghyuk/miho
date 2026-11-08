@@ -59,7 +59,20 @@ async function setup(notify: Config['telegram']['notify'] = ['task_done', 'decis
       },
     } as Update);
 
-  return { app, orch, tg, calls, project, settle, tap, warnings };
+  const replyTo = (messageId: number, text: string) =>
+    tg.bot.handleUpdate({
+      update_id: Math.floor(Math.random() * 1e9),
+      message: {
+        message_id: 1000,
+        date: 0,
+        chat: { id: OWNER, type: 'private', first_name: 'u' },
+        from: { id: OWNER, is_bot: false, first_name: 'u' },
+        text,
+        reply_to_message: { message_id: messageId, date: 0, chat: { id: OWNER, type: 'private', first_name: 'u' } },
+      },
+    } as Update);
+
+  return { app, orch, tg, calls, project, settle, tap, replyTo, warnings };
 }
 
 test('permission prompt is sent with buttons, approved from Telegram, then edited', async () => {
@@ -112,6 +125,48 @@ test('taps from other chats are ignored and logged', async () => {
   await t.tap(`p:${decision!.id}:a`, STRANGER);
   assert.equal(t.orch.listDecisions('pending').length, 1);
   assert.match(t.warnings[0] ?? '', /ignored update from chat 999/);
+  await t.tg.stop();
+  await t.app.close();
+});
+
+test('multi-select question: tick options, then Submit', async () => {
+  const t = await setup();
+  t.orch.startSession(t.project.id, { prompt: '[question]' });
+  await t.settle();
+  const [decision] = t.orch.listDecisions('pending');
+  const prompt = t.calls.find((c) => c.method === 'sendMessage' && String(c.payload.text).startsWith('Question'));
+  const rows = (prompt!.payload.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard;
+  assert.deepEqual(rows.map((r) => r[0]!.callback_data), [0, 1, 2].map((i) => `t:${decision!.id}:${i}`).concat(`s:${decision!.id}`));
+
+  await t.tap(`s:${decision!.id}`);
+  assert.equal(t.calls.filter((c) => c.method === 'answerCallbackQuery').at(-1)?.payload.text, 'Pick at least one option');
+  for (const i of [2, 0, 1, 1]) await t.tap(`t:${decision!.id}:${i}`); // 1 ticked, then unticked
+  const marks = t.calls.filter((c) => c.method === 'editMessageReplyMarkup').at(-1)?.payload.reply_markup as {
+    inline_keyboard: { text: string }[][];
+  };
+  assert.deepEqual(marks.inline_keyboard.map((r) => r[0]!.text), ['☑ a', '☐ b', '☑ c', 'Submit']);
+  await t.tap(`s:${decision!.id}`);
+  await t.settle();
+
+  const done = t.calls.find((c) => c.method === 'sendMessage' && String(c.payload.text).startsWith('Task done'));
+  assert.match(String(done?.payload.text), /\(answer: a, c\)/);
+  await t.tg.stop();
+  await t.app.close();
+});
+
+test('a text reply to a question prompt answers it', async () => {
+  const t = await setup();
+  t.orch.startSession(t.project.id, { prompt: '[question]' });
+  await t.settle();
+  const prompt = t.calls.find((c) => c.method === 'sendMessage' && String(c.payload.text).startsWith('Question'));
+  await t.replyTo(999, 'not a prompt'); // ignored
+  assert.equal(t.orch.listDecisions('pending').length, 1);
+  await t.replyTo(t.calls.indexOf(prompt!) + 1, 'none of them');
+  await t.settle();
+
+  assert.equal(t.orch.listDecisions('answered')[0]?.answeredVia, 'telegram');
+  const done = t.calls.find((c) => c.method === 'sendMessage' && String(c.payload.text).startsWith('Task done'));
+  assert.match(String(done?.payload.text), /\(answer: none of them\)/);
   await t.tg.stop();
   await t.app.close();
 });

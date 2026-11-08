@@ -15,7 +15,9 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s
 
 /**
  * Sends orchestrator alerts to the owner's chat and turns button taps into decision answers.
- * callback_data: "p:<decisionId>:a|d" (permission), "q:<decisionId>:<optionIndex>" (question), "r:<sessionId>" (resume).
+ * callback_data: "p:<decisionId>:a|d" (permission), "q:<decisionId>:<optionIndex>" (question),
+ * "t:<decisionId>:<optionIndex>" / "s:<decisionId>" (toggle / submit a multi-select question), "r:<sessionId>" (resume).
+ * A text reply to a question prompt answers it with that text.
  */
 export function createTelegram(
   orch: Orchestrator,
@@ -26,6 +28,13 @@ export function createTelegram(
   const bot = new Bot(opts.token, botConfig);
   /** Sent decision prompts, so they can be edited once answered or expired. */
   const prompts = new Map<string, { messageId: number; text: string }>();
+  /** Options ticked so far on multi-select question prompts. */
+  const picked = new Map<string, Set<number>>();
+  const pendingQuestion = (id: string) => {
+    const decision = orch.listDecisions('pending').find((d) => d.id === id);
+    if (decision?.kind !== 'question') throw new HttpError(409, 'Decision already answered');
+    return decision;
+  };
 
   const label = (sessionId: string) => {
     const session = orch.getSession(sessionId);
@@ -40,6 +49,7 @@ export function createTelegram(
       const prompt = prompts.get(event.decisionId);
       if (!prompt) return;
       prompts.delete(event.decisionId);
+      picked.delete(event.decisionId);
       const outcome = event.answeredVia ? `Answered via ${event.answeredVia}` : 'Expired';
       await bot.api.editMessageText(opts.chatId, prompt.messageId, `${prompt.text}\n\n— ${outcome}`);
       return;
@@ -85,9 +95,21 @@ export function createTelegram(
       if (kind === 'p') {
         orch.answerDecision(id, { answer: { behavior: arg === 'a' ? 'allow' : 'deny' } }, 'telegram');
       } else if (kind === 'q') {
-        const decision = orch.listDecisions('pending').find((d) => d.id === id);
-        const choice = decision?.kind === 'question' ? decision.payload.options[Number(arg)] : undefined;
+        const choice = pendingQuestion(id).payload.options[Number(arg)];
         if (!choice) throw new HttpError(409, 'Decision already answered');
+        orch.answerDecision(id, { answer: { choice } }, 'telegram');
+      } else if (kind === 't') {
+        const decision = pendingQuestion(id);
+        const set = picked.get(id) ?? new Set<number>();
+        const i = Number(arg);
+        if (!set.delete(i)) set.add(i);
+        picked.set(id, set);
+        await ctx.editMessageReplyMarkup({ reply_markup: decisionKeyboard(decision, set) });
+      } else if (kind === 's') {
+        const decision = pendingQuestion(id);
+        const set = picked.get(id);
+        if (!set?.size) throw new HttpError(400, 'Pick at least one option');
+        const choice = decision.payload.options.filter((_, i) => set.has(i)).join(', ');
         orch.answerDecision(id, { answer: { choice } }, 'telegram');
       } else if (kind === 'r') {
         orch.sendMessage(id, RESUME_PROMPT);
@@ -97,6 +119,19 @@ export function createTelegram(
     } catch (err) {
       await ctx.answerCallbackQuery({ text: err instanceof HttpError ? err.message : 'Failed' });
       if (!(err instanceof HttpError)) throw err;
+    }
+  });
+
+  bot.on('message:text', async (ctx) => {
+    const repliedTo = ctx.message.reply_to_message?.message_id;
+    const id = [...prompts].find(([, p]) => p.messageId === repliedTo)?.[0];
+    if (!id) return;
+    try {
+      pendingQuestion(id);
+      orch.answerDecision(id, { answer: { choice: ctx.message.text } }, 'telegram');
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      await ctx.reply(err.message);
     }
   });
 
@@ -119,15 +154,22 @@ export function createTelegram(
 }
 
 function decisionText(d: Decision, where: string): string {
-  if (d.kind === 'question') return `Question — ${where}\n\n${d.payload.question}`;
+  if (d.kind === 'question') {
+    const how = d.payload.multiSelect ? 'Tick options, then Submit, or reply' : 'Tap an option or reply';
+    return `Question — ${where}\n\n${d.payload.question}\n\n(${how} to this message with your own answer.)`;
+  }
   return `Permission needed — ${where}\n\nTool: ${d.payload.toolName}\n${clip(JSON.stringify(d.payload.input, null, 2), 1500)}`;
 }
 
-function decisionKeyboard(d: Decision): InlineKeyboard {
+function decisionKeyboard(d: Decision, picked = new Set<number>()): InlineKeyboard {
   if (d.kind === 'permission') {
     return new InlineKeyboard().text('Approve', `p:${d.id}:a`).text('Deny', `p:${d.id}:d`);
   }
   const kb = new InlineKeyboard();
-  d.payload.options.forEach((option, i) => kb.text(clip(option, 40), `q:${d.id}:${i}`).row());
-  return kb;
+  if (!d.payload.multiSelect) {
+    d.payload.options.forEach((option, i) => kb.text(clip(option, 40), `q:${d.id}:${i}`).row());
+    return kb;
+  }
+  d.payload.options.forEach((option, i) => kb.text(`${picked.has(i) ? '☑' : '☐'} ${clip(option, 38)}`, `t:${d.id}:${i}`).row());
+  return kb.text('Submit', `s:${d.id}`);
 }

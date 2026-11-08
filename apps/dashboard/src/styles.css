@@ -240,6 +240,8 @@ button.chip-button:hover:not(:disabled), button.chip-button.active { background:
 .decision-title strong { text-transform: none; letter-spacing: 0; font-size: 13px; }
 .decision > p { margin-top: 8px; font-size: 15px; }
 .decision .actions { margin-top: 12px; }
+.decision form.actions { flex-wrap: nowrap; }
+.decision form.actions input { flex: 1; min-width: 0; }
 .decision-group { margin-bottom: 14px; }
 .decision-group .crumbs { margin-bottom: 6px; }
 .composer {

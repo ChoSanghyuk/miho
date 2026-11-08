@@ -53,7 +53,7 @@ ai_orchestrator/
 │  │     ├─ sessions/
 │  │     │  ├─ types.ts       SessionManager / SessionHost interfaces (the AI-integration boundary)
 │  │     │  ├─ agent-sdk.ts   AgentSdkSessionManager: real Claude Code sessions
-│  │     │  └─ fake.ts        FakeSessionManager: echoes prompts; "[decision]" / "[limit]" trigger a permission / usage limit
+│  │     │  └─ fake.ts        FakeSessionManager: echoes prompts; "[decision]" / "[question]" / "[limit]" trigger a permission / multi-select question / usage limit
 │  │     ├─ telegram/index.ts createTelegram(): alerts out, button taps in
 │  │     ├─ app.test.ts       API, lifecycle, auth and WebSocket tests
 │  │     └─ telegram/telegram.test.ts
@@ -113,7 +113,7 @@ Rules that keep the domains separate:
 | `sessions` | id, project_id, role, claude_session_id, status, model, cost_usd, started_at, ended_at | `role` is null for the project root; `claude_session_id` is the SDK's id, used for resume; `cost_usd` is the running total |
 | `messages` | seq (autoincrement), id, session_id, role, body_json | console history; ordered by `seq`. Roles: user, assistant, tool, system |
 | `tasks` | id, project_id, role, name, content, parallel, status, group_id, position, session_id, delegated_by, report, created_at | todo tasks (see "Todo tasks"). A group is the tasks sharing `group_id`, ordered by `position`; no groups table, and a group of one is dissolved. `delegated_by`/`report`: see "Delegation" |
-| `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options} → answer {choice}. Status pending → answered or expired |
+| `decisions` | id, session_id, kind, payload_json, status, answered_via, answer_json | kind `permission` {toolName, input} → answer {behavior}; kind `question` {question, options, multiSelect?} → answer {choice}: any non-empty text (an option, several joined with ", ", or the owner's own words). Status pending → answered or expired |
 
 Message `body` shapes: `{text}` (user/assistant), `{tool, input}` (tool call), `{toolUseId, result, isError}` (tool result, truncated to 4000 chars).
 
@@ -261,6 +261,8 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 - **Button data (`callback_data`):**
   - `p:<decisionId>:a|d` approves or denies a permission.
   - `q:<decisionId>:<optionIndex>` answers a question.
+  - `t:<decisionId>:<optionIndex>` ticks or unticks an option of a multi-select question (kept in memory); `s:<decisionId>` submits the ticked ones.
+  - A text reply to a question prompt answers it with that text.
   - `r:<sessionId>` resumes with "Continue where you left off."
 - **Message format:** plain text, no parse mode. There are no URL buttons, because Telegram rejects localhost links.
 
@@ -277,7 +279,7 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
   - `ORCH_OWNER_TOKEN`: required; the server exits without it.
   - `TELEGRAM_BOT_TOKEN`: Telegram is disabled with a warning if it or `chatId` is missing.
   - `ANTHROPIC_API_KEY`: optional; otherwise the claude.ai login is used.
-- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens. Its prompts `[decision]` and `[limit]` trigger a permission and a usage limit (reset 50 ms later); a line `[delegate:<role>] <text>` calls `delegate`.
+- **`ORCH_FAKE_SESSIONS=1`** uses `FakeSessionManager`, so UI work spends no tokens. Its prompts `[decision]`, `[question]` and `[limit]` trigger a permission, a multi-select question (a, b, c) and a usage limit (reset 50 ms later); a line `[delegate:<role>] <text>` calls `delegate`.
 
 ## Operations
 
@@ -300,7 +302,6 @@ In production, the built dashboard (`apps/dashboard/dist`) is served at `/` by t
 
 ## Known gaps and quirks
 
-- **Multi-select questions:** an `AskUserQuestion` with `multiSelect` is answered with a single option, and free-text "Other" answers aren't supported.
 - **Background commands:** Claude Code can move a long command into the background and end its turn. The session then shows `idle` while the command runs, and Interrupt has no turn to stop.
 - **Bare sleeps:** Claude Code refuses plain `sleep` waits. Use real work when testing interrupts.
 - **`interrupt` is optimistic:** the status becomes `idle` immediately, and the aborted turn's `result` is dropped when it arrives.
