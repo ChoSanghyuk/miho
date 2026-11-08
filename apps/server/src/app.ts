@@ -13,6 +13,8 @@ const roleRequestBody = roleBody.extend({
   guidelineIds: z.array(z.string()).optional(),
   descriptionIndex: z.number().int().optional(),
 });
+const projectRoleParams = z.object({ id: z.string(), role: z.string() });
+const updateProjectRoleBody = z.object({ content: z.string() });
 const createProjectBody = z.object({
   name: z.string().min(1),
   workdir: z.string().min(1),
@@ -86,6 +88,14 @@ export async function buildApp(opts: {
     const project = orch.addProjectRole(idParams.parse(req.params).id, roleBody.parse(req.body));
     reply.status(201);
     return project;
+  });
+  app.get('/api/projects/:id/roles/:role', async (req) => {
+    const { id, role } = projectRoleParams.parse(req.params);
+    return orch.getProjectRole(id, role);
+  });
+  app.put('/api/projects/:id/roles/:role', async (req) => {
+    const { id, role } = projectRoleParams.parse(req.params);
+    return orch.updateProjectRole(id, role, updateProjectRoleBody.parse(req.body).content);
   });
 
   app.get('/api/roles', async () => orch.listRoles());

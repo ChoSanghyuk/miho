@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects (create, single or roles), Project (start session, add roles, delete), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session, add and edit roles, delete), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
 │     └─ styles.css           design tokens (CSS variables, light/dark) and all styles; fonts are linked in index.html
 ```
@@ -117,7 +117,7 @@ Rules that keep the domains separate:
 
 Message `body` shapes: `{text}` (user/assistant), `{tool, input}` (tool call), `{toolUseId, result, isError}` (tool result, truncated to 4000 chars).
 
-**Roles.** The API returns each role with a computed `content` (`composeRole`): its guidelines as `## name\n\ndescription` with its own text inserted at `descriptionIndex`. It is composed on read, so a guideline edit reaches every role, but not CLAUDE.md files already written. Creating a project with `roles` makes `<workdir>/<role>/CLAUDE.md` (`# Role: <name>` + description) for each one; an existing CLAUDE.md is kept. `POST /api/projects/:id/roles` adds one more role to an existing project (also a single-session one) by the same rule. The request carries name and description (the dashboard sends a predefined role's `content`), so roles added for one project only are never stored in `roles`, and editing or deleting a predefined role doesn't touch existing projects. A session started with a `role` runs with `cwd = <workdir>/<role>` (also on resume), so Claude Code loads that role's CLAUDE.md.
+**Roles.** The API returns each role with a computed `content` (`composeRole`): its guidelines as `## name\n\ndescription` with its own text inserted at `descriptionIndex`. It is composed on read, so a guideline edit reaches every role, but not CLAUDE.md files already written. Creating a project with `roles` makes `<workdir>/<role>/CLAUDE.md` (`# Role: <name>` + description) for each one; an existing CLAUDE.md is kept. `POST /api/projects/:id/roles` adds one more role to an existing project (also a single-session one) by the same rule. `GET/PUT /api/projects/:id/roles/:role` reads and overwrites that role's CLAUDE.md as a whole; running sessions keep what they loaded, and new or resumed ones read the new file. The request carries name and description (the dashboard sends a predefined role's `content`), so roles added for one project only are never stored in `roles`, and editing or deleting a predefined role doesn't touch existing projects. A session started with a `role` runs with `cwd = <workdir>/<role>` (also on resume), so Claude Code loads that role's CLAUDE.md.
 
 Schema change workflow: edit `schema.ts`, run `pnpm --filter @orch/server db:generate`, and commit the new file in `drizzle/`. It is applied automatically on the next start.
 
@@ -228,6 +228,7 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 | `GET/POST /api/projects` | list / create `{name, workdir, createDir?, roles?: [{name, description}]}` (workdir relative to or inside `rootDir`). Missing workdir → 404 unless `createDir: true`, which creates it; duplicate name → 409 |
 | `DELETE /api/projects/:id` | 204. Removes the project and its sessions, messages, decisions and tasks from the DB; idle sessions are stopped. The workdir on disk is never touched. Any queued/running/waiting_decision session → 409 |
 | `POST /api/projects/:id/roles` `{name, description}` | add a role (folder + CLAUDE.md) to an existing project; 201 with the project. Role already in the project → 409 |
+| `GET/PUT /api/projects/:id/roles/:role` | read / replace `{content}` of `<workdir>/<role>/CLAUDE.md`; `{name, content}`. Role not in the project → 404 |
 | `GET/POST /api/projects/:id/sessions` | list / start `{prompt, model?, role?}` (role must be one of the project's, else 400) |
 | `GET/POST /api/roles`, `PUT/DELETE /api/roles/:id` | predefined roles: list / create / update `{name, description, guidelineIds?, descriptionIndex?}` / delete. Duplicate name → 409 |
 | `GET/POST /api/guidelines`, `PUT/DELETE /api/guidelines/:id` | shared guidelines `{name, description}`. Duplicate name or delete while in use → 409 |

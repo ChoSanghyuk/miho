@@ -34,6 +34,7 @@ export function ProjectPage({ projectName }: { projectName: string }) {
       void qc.invalidateQueries({ queryKey: ['projects'] });
     },
   });
+  const [editing, setEditing] = useState<string | null>(null);
   const remove = useMutation({
     mutationFn: () => api.deleteProject(projectId),
     onSuccess: () => {
@@ -97,15 +98,24 @@ export function ProjectPage({ projectName }: { projectName: string }) {
             {project.roles.length ? (
               <span className="chips">
                 {project.roles.map((r) => (
-                  <span key={r} className="chip">
+                  <button
+                    key={r}
+                    type="button"
+                    className={`chip chip-button${editing === r ? ' active' : ''}`}
+                    title="Edit CLAUDE.md"
+                    onClick={() => setEditing(editing === r ? null : r)}
+                  >
                     {r}
-                  </span>
+                  </button>
                 ))}
               </span>
             ) : (
               <span className="muted">none (single session)</span>
             )}
           </div>
+          {editing && (
+            <ProjectRoleEditor key={editing} projectId={projectId} role={editing} onClose={() => setEditing(null)} />
+          )}
           <div className="form-row">
             <select value={predefined} onChange={(e) => setPredefined(e.target.value)} aria-label="Predefined role">
               <option value="">Predefined role…</option>
@@ -179,5 +189,45 @@ export function ProjectPage({ projectName }: { projectName: string }) {
         </div>
       )}
     </>
+  );
+}
+
+/** Edits a project role's CLAUDE.md as a whole. Running sessions pick the change up on their next start or resume. */
+function ProjectRoleEditor({ projectId, role, onClose }: { projectId: string; role: string; onClose: () => void }) {
+  const file = useQuery({
+    queryKey: ['project-role', projectId, role],
+    queryFn: () => api.projectRole(projectId, role),
+    staleTime: 0,
+  });
+  const [content, setContent] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => api.updateProjectRole(projectId, role, { content: content ?? '' }),
+    onSuccess: onClose,
+  });
+  const value = content ?? file.data?.content ?? '';
+
+  return (
+    <div className="stack">
+      <label className="eyebrow field-label" htmlFor="role-content">
+        {role}/CLAUDE.md
+      </label>
+      <textarea
+        id="role-content"
+        rows={10}
+        className="mono"
+        value={value}
+        disabled={!file.data}
+        onChange={(e) => setContent(e.target.value)}
+      />
+      <div className="actions end">
+        <button type="button" className="secondary" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" disabled={content === null || save.isPending} onClick={() => save.mutate()}>
+          Save
+        </button>
+      </div>
+      {(file.error ?? save.error) && <p className="error">{(file.error ?? save.error)?.message}</p>}
+    </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   MoveTaskRequest,
   GuidelineRequest,
   Project,
+  ProjectRoleFile,
   Role,
   RoleInput,
   RoleRequest,
@@ -15,6 +16,7 @@ import type {
   StartSessionRequest,
   Task,
   TasksResponse,
+  UpdateProjectRoleRequest,
 } from '@orch/shared';
 
 /** The server rejected the owner token (missing or expired cookie). */
@@ -51,6 +53,10 @@ export const api = {
   createProject: (req: CreateProjectRequest) => call<Project>('POST', '/api/projects', req),
   deleteProject: (id: string) => call<void>('DELETE', `/api/projects/${id}`),
   addProjectRole:(id: string, req: RoleInput) => call<Project>('POST', `/api/projects/${id}/roles`, req),
+  projectRole: (id: string, role: string) =>
+    call<ProjectRoleFile>('GET', `/api/projects/${id}/roles/${encodeURIComponent(role)}`),
+  updateProjectRole: (id: string, role: string, req: UpdateProjectRoleRequest) =>
+    call<ProjectRoleFile>('PUT', `/api/projects/${id}/roles/${encodeURIComponent(role)}`, req),
   roles: () => call<Role[]>('GET', '/api/roles'),
   createRole: (req: RoleRequest) => call<Role>('POST', '/api/roles', req),
   updateRole: (id: string, req: RoleRequest) => call<Role>('PUT', `/api/roles/${id}`, req),

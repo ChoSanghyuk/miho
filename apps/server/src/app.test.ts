@@ -346,6 +346,26 @@ describe('roles', () => {
     await t.app.close();
   });
 
+  test('a project role CLAUDE.md can be read and updated', async () => {
+    const t = await setup();
+    const project = (
+      await t.req<Project>('POST', '/api/projects', {
+        name: 'edit',
+        workdir: 'edit',
+        createDir: true,
+        roles: [{ name: 'qa', description: 'Tests.' }],
+      })
+    ).body;
+    const url = `/api/projects/${project.id}/roles/qa`;
+    assert.deepEqual((await t.req('GET', url)).body, { name: 'qa', content: '# Role: qa\n\nTests.\n' });
+    const res = await t.req('PUT', url, { content: '# Role: qa\n\nTests everything.\n' });
+    assert.equal(res.status, 200);
+    assert.equal(readFileSync(path.join(root, 'edit', 'qa', 'CLAUDE.md'), 'utf8'), '# Role: qa\n\nTests everything.\n');
+    assert.equal((await t.req('PUT', `/api/projects/${project.id}/roles/dev`, { content: '' })).status, 404);
+    assert.equal((await t.req('PUT', url, {})).status, 400);
+    await t.app.close();
+  });
+
   test('a role session runs in the role folder', async () => {
     const workdirs: string[] = [];
     const t = await setup(undefined, (host) => {

@@ -45,6 +45,12 @@ export interface RoleInput {
   description: string;
 }
 
+/** A project role's `<workdir>/<role>/CLAUDE.md`, read and written as a whole. */
+export interface ProjectRoleFile {
+  name: string;
+  content: string;
+}
+
 export interface Session {
   id: string;
   projectId: string;
@@ -122,6 +128,11 @@ export interface CreateProjectRequest {
   createDir?: boolean;
   /** Creates <workdir>/<name>/CLAUDE.md for each role (existing files are kept). */
   roles?: RoleInput[];
+}
+
+export interface UpdateProjectRoleRequest {
+  /** The new CLAUDE.md content. */
+  content: string;
 }
 
 export interface RoleRequest {

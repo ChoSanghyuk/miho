@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { and, asc, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
@@ -13,6 +13,7 @@ import type {
   GuidelineRequest,
   MessageRole,
   Project,
+  ProjectRoleFile,
   Role,
   RoleInput,
   RoleRequest,
@@ -145,6 +146,25 @@ export class Orchestrator implements SessionHost {
     const updated = { ...project, roles: [...project.roles, role.name] };
     this.db.update(projects).set({ roles: updated.roles }).where(eq(projects.id, projectId)).run();
     return updated;
+  }
+
+  /** A project role's CLAUDE.md. Running sessions keep what they loaded; new and resumed ones read the file again. */
+  getProjectRole(projectId: string, role: string): ProjectRoleFile {
+    const file = this.roleFile(projectId, role);
+    return { name: role, content: existsSync(file) ? readFileSync(file, 'utf8') : '' };
+  }
+
+  updateProjectRole(projectId: string, role: string, content: string): ProjectRoleFile {
+    const file = this.roleFile(projectId, role);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+    return { name: role, content };
+  }
+
+  private roleFile(projectId: string, role: string): string {
+    const project = this.getProject(projectId);
+    if (!project.roles.includes(role)) throw new HttpError(404, `project has no role "${role}"`);
+    return path.join(project.workdir, role, 'CLAUDE.md');
   }
 
   /** Removes the project and its sessions, history, decisions and tasks from the DB. The workdir is never touched. */
