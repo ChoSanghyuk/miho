@@ -23,12 +23,14 @@ export function ProjectPage({ projectName }: { projectName: string }) {
   const roles = useQuery({ queryKey: ['roles'], queryFn: api.roles });
   const available = roles.data?.filter((r) => !project?.roles.includes(r.name)) ?? [];
   const [predefined, setPredefined] = useState('');
+  const [predefinedExtra, setPredefinedExtra] = useState('');
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const addRole = useMutation({
     mutationFn: (role: RoleInput) => api.addProjectRole(projectId, role),
     onSuccess: () => {
       setPredefined('');
+      setPredefinedExtra('');
       setNewName('');
       setNewDesc('');
       void qc.invalidateQueries({ queryKey: ['projects'] });
@@ -116,7 +118,7 @@ export function ProjectPage({ projectName }: { projectName: string }) {
           {editing && (
             <ProjectRoleEditor key={editing} projectId={projectId} role={editing} onClose={() => setEditing(null)} />
           )}
-          <div className="form-row">
+          <div className="role-form">
             <select value={predefined} onChange={(e) => setPredefined(e.target.value)} aria-label="Predefined role">
               <option value="">Predefined role…</option>
               {available.map((r) => (
@@ -130,13 +132,23 @@ export function ProjectPage({ projectName }: { projectName: string }) {
               className="secondary"
               disabled={!predefined || addRole.isPending}
               onClick={() => {
-                // A predefined role sends its composed content (own text + guidelines) as the CLAUDE.md body.
+                // A predefined role sends its composed content (own text + guidelines) as the CLAUDE.md body,
+                // preceded by the extra text for this project only.
                 const r = available.find((x) => x.id === predefined);
-                if (r) addRole.mutate({ name: r.name, description: r.content });
+                const extra = predefinedExtra.trim();
+                if (r) addRole.mutate({ name: r.name, description: extra ? `${extra}\n\n${r.content}` : r.content });
               }}
             >
               Add role
             </button>
+            {predefined && (
+              <textarea
+                rows={3}
+                placeholder="Extra description for this project (optional)"
+                value={predefinedExtra}
+                onChange={(e) => setPredefinedExtra(e.target.value)}
+              />
+            )}
           </div>
           <div className="role-form">
             <input placeholder="Role for this project only" value={newName} onChange={(e) => setNewName(e.target.value)} />

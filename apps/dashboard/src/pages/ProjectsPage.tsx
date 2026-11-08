@@ -15,11 +15,18 @@ export function ProjectsPage() {
   const [extra, setExtra] = useState<RoleInput[]>([]);
   const [extraName, setExtraName] = useState('');
   const [extraDesc, setExtraDesc] = useState('');
+  // Extra text appended to a predefined role's content, for this project only.
+  const [additions, setAdditions] = useState<Record<string, string>>({});
 
-  // Predefined roles send their composed content (own text + guidelines) as the CLAUDE.md body.
+  // Predefined roles send their composed content (own text + guidelines), preceded by any addition, as the CLAUDE.md body.
   const options: (RoleInput & { content?: string })[] = [...(roles.data ?? []), ...extra];
+  const body = (r: (typeof options)[number]) => {
+    if (r.content === undefined) return r.description;
+    const addition = additions[r.name]?.trim();
+    return addition ? `${addition}\n\n${r.content}` : r.content;
+  };
   const selected = multi
-    ? options.filter((r) => checked.has(r.name)).map((r) => ({ name: r.name, description: r.content ?? r.description }))
+    ? options.filter((r) => checked.has(r.name)).map((r) => ({ name: r.name, description: body(r) }))
     : undefined;
   const toggle = (roleName: string) =>
     setChecked((s) => {
@@ -45,6 +52,7 @@ export function ProjectsPage() {
       setMulti(false);
       setChecked(new Set());
       setExtra([]);
+      setAdditions({});
       void qc.invalidateQueries({ queryKey: ['projects'] });
       location.hash = `#/projects/${encodeURIComponent(p.name)}`;
     },
@@ -83,11 +91,22 @@ export function ProjectsPage() {
           <div>
             {options.length === 0 && <p className="muted">No roles yet. Define them under Roles, or add one below.</p>}
             {options.map((r) => (
-              <label key={r.name} className="check">
-                <input type="checkbox" checked={checked.has(r.name)} onChange={() => toggle(r.name)} />
-                <strong>{r.name}</strong>
-                <span className="muted">{r.description}</span>
-              </label>
+              <div key={r.name}>
+                <label className="check">
+                  <input type="checkbox" checked={checked.has(r.name)} onChange={() => toggle(r.name)} />
+                  <strong>{r.name}</strong>
+                  <span className="muted">{r.description}</span>
+                </label>
+                {r.content !== undefined && checked.has(r.name) && (
+                  <textarea
+                    className="role-addition"
+                    rows={2}
+                    placeholder={`Extra description of ${r.name} for this project (optional)`}
+                    value={additions[r.name] ?? ''}
+                    onChange={(e) => setAdditions((a) => ({ ...a, [r.name]: e.target.value }))}
+                  />
+                )}
+              </div>
             ))}
             <div className="role-form">
               <input placeholder="Role for this project only" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
