@@ -23,6 +23,7 @@ import type {
   StartSessionRequest,
   Task,
   TasksResponse,
+  UpdateTaskRequest,
 } from '@orch/shared';
 import type { Config } from './config.js';
 import type { Db } from './db/index.js';
@@ -393,6 +394,15 @@ export class Orchestrator implements SessionHost {
     this.db.insert(tasks).values(task).run();
     this.bus.emit({ type: 'tasks_changed' });
     return task;
+  }
+
+  /** Name and content (the prompt); not while working or after it is done. */
+  updateTask(id: string, req: UpdateTaskRequest): Task {
+    const task = this.getTask(id);
+    if (task.status === 'working' || task.status === 'done') throw new HttpError(409, `Task is ${task.status}`);
+    this.db.update(tasks).set({ name: req.name, content: req.content }).where(eq(tasks.id, id)).run();
+    this.tasksChanged();
+    return { ...task, name: req.name, content: req.content };
   }
 
   deleteTask(id: string): void {

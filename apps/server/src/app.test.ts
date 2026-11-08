@@ -500,6 +500,24 @@ describe('tasks', () => {
     await t.app.close();
   });
 
+  test('a task can be edited until it is working or done; the run uses the new content', async () => {
+    const t = await tasksSetup();
+    const project = await t.createProject('alpha');
+    const a = await t.createTask(project.id, 'first', { content: 'old' });
+    const edited = await t.req<Task>('PUT', `/api/tasks/${a.id}`, { name: 'renamed', content: 'new' });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.name, 'renamed');
+    assert.equal((await t.req('PUT', `/api/tasks/${a.id}`, { name: 'x', content: '' })).status, 400);
+    assert.equal((await t.req('PUT', '/api/tasks/nope', { name: 'x', content: 'y' })).status, 404);
+
+    await t.run(a.id);
+    const done = await t.waitTask(a.id, 'done');
+    const history = (await t.req<SessionMessage[]>('GET', `/api/sessions/${done.sessionId}/messages`)).body;
+    assert.equal((history[0]!.body as { text: string }).text, 'new');
+    assert.equal((await t.req('PUT', `/api/tasks/${a.id}`, { name: 'x', content: 'y' })).status, 409);
+    await t.app.close();
+  });
+
   test('parallel tasks cannot be grouped', async () => {
     const t = await tasksSetup();
     const project = await t.createProject('alpha');

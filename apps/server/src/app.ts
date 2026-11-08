@@ -37,6 +37,7 @@ const createTaskBody = z.object({
   content: z.string().min(1),
   parallel: z.boolean(),
 });
+const updateTaskBody = z.object({ name: z.string().min(1), content: z.string().min(1) });
 const taskStatusBody = z.object({ status: z.enum(['wait', 'run']) });
 const moveTaskBody = z.object({ before: z.string().min(1).optional(), groupId: z.string().min(1).optional() });
 const decisionsQuery = z.object({ status: z.enum(['pending', 'answered', 'expired']).optional() });
@@ -146,6 +147,7 @@ export async function buildApp(opts: {
     reply.status(201);
     return orch.createTask(createTaskBody.parse(req.body));
   });
+  app.put('/api/tasks/:id', async (req) => orch.updateTask(idParams.parse(req.params).id, updateTaskBody.parse(req.body)));
   app.put('/api/tasks/:id/status', async (req) =>
     orch.setTaskStatus(idParams.parse(req.params).id, taskStatusBody.parse(req.body).status),
   );

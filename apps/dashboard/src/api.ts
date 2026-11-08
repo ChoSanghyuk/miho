@@ -17,6 +17,7 @@ import type {
   Task,
   TasksResponse,
   UpdateProjectRoleRequest,
+  UpdateTaskRequest,
 } from '@orch/shared';
 
 /** The server rejected the owner token (missing or expired cookie). */
@@ -77,6 +78,7 @@ export const api = {
   createTask: (req: CreateTaskRequest) => call<Task>('POST', '/api/tasks', req),
   setTaskStatus: (id: string, status: 'wait' | 'run') => call<Task>('PUT', `/api/tasks/${id}/status`, { status }),
   moveTask: (id: string, req: MoveTaskRequest) => call<void>('PUT', `/api/tasks/${id}/position`, req),
+  updateTask: (id: string, req: UpdateTaskRequest) => call<Task>('PUT', `/api/tasks/${id}`, req),
   deleteTask: (id: string) => call<void>('DELETE', `/api/tasks/${id}`),
   runGroup: (groupId: string) => call<void>('POST', `/api/task-groups/${groupId}/run`),
   decisions: (status?: Decision['status']) =>

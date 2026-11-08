@@ -170,6 +170,12 @@ export interface CreateTaskRequest {
   parallel: boolean;
 }
 
+/** Allowed unless the task is working or done. */
+export interface UpdateTaskRequest {
+  name: string;
+  content: string;
+}
+
 export interface SetTaskStatusRequest {
   status: 'wait' | 'run';
 }

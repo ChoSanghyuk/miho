@@ -33,6 +33,7 @@ export function TasksPage() {
   // Drag state: the task being dragged and the drop target under the pointer.
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const dropProps = (key: string, req: MoveTaskRequest, enabled = true) =>
     enabled && dragId
       ? {
@@ -79,7 +80,7 @@ export function TasksPage() {
       <li
         key={t.id}
         className={`card task ${over === t.id ? 'drop-over' : ''}`}
-        draggable={draggable(t)}
+        draggable={draggable(t) && editing !== t.id}
         onDragStart={(e) => {
           e.dataTransfer.setData('text/plain', t.id);
           setDragId(t.id);
@@ -126,6 +127,11 @@ export function TasksPage() {
                 Retry
               </button>
             )}
+            {t.status !== 'working' && t.status !== 'done' && editing !== t.id && (
+              <button type="button" className="secondary small" onClick={() => setEditing(t.id)}>
+                Edit
+              </button>
+            )}
             {t.status !== 'working' && (
               <button type="button" className="danger small" onClick={() => remove.mutate(t.id)}>
                 Delete
@@ -133,7 +139,17 @@ export function TasksPage() {
             )}
           </span>
         </div>
-        <p className="muted content">{t.content}</p>
+        {editing === t.id ? (
+          <EditTaskForm
+            task={t}
+            onClose={() => {
+              setEditing(null);
+              refresh();
+            }}
+          />
+        ) : (
+          <p className="muted content">{t.content}</p>
+        )}
       </li>
     );
   };
@@ -215,6 +231,35 @@ export function TasksPage() {
         </>
       )}
     </>
+  );
+}
+
+/** Edits a task's name and content (its prompt) in place. */
+function EditTaskForm({ task, onClose }: { task: Task; onClose: () => void }) {
+  const [name, setName] = useState(task.name);
+  const [content, setContent] = useState(task.content);
+  const save = useMutation({ mutationFn: () => api.updateTask(task.id, { name, content }), onSuccess: onClose });
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} required />
+      <textarea aria-label="Content" rows={4} value={content} onChange={(e) => setContent(e.target.value)} required />
+      <div className="actions end">
+        <button type="button" className="secondary small" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="small" disabled={save.isPending}>
+          Save
+        </button>
+      </div>
+      {save.error && <p className="error">{save.error.message}</p>}
+    </form>
   );
 }
 

@@ -62,7 +62,7 @@ ai_orchestrator/
 │     ├─ App.tsx              auth gate (LoginPage or Shell), hash router, header with pending-decision badge
 │     ├─ api.ts               typed fetch wrapper for every endpoint; throws Unauthorized on 401
 │     ├─ useEvents.ts         /ws client: reconnect with backoff, patches the query cache from events
-│     ├─ pages/               Projects (create, single or roles), Project (start session, add and edit roles, delete), Session (console), Tasks (todos, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
+│     ├─ pages/               Projects (create, single or roles), Project (start session, add and edit roles, delete), Session (console), Tasks (todos, inline edit, drag-and-drop groups; History tab for completed ones), Decisions, Roles, Guidelines, Login
 │     ├─ components/          DecisionCard (answer UI), StatusPill, RoleEditor (guideline pick/order + preview)
 │     └─ styles.css           design tokens (CSS variables, light/dark) and all styles; fonts are linked in index.html
 ```
@@ -237,6 +237,7 @@ Every route except `POST /api/login` needs the owner token. Errors are `{error: 
 | `POST /api/sessions/:id/interrupt` | 204 |
 | `DELETE /api/sessions/:id` | terminate, 204 |
 | `GET/POST /api/tasks` | `{tasks, pausedUntil}` / create `{projectId, role?, name, content, parallel}` |
+| `PUT /api/tasks/:id` `{name, content}` | edit a task; 409 if working or done |
 | `PUT /api/tasks/:id/status` `{status: wait\|run}` | 409 if working or done |
 | `PUT /api/tasks/:id/position` `{before?, groupId?}` | `before`: into that task's group, in front of it; `groupId`: append; neither: ungroup. 204 |
 | `DELETE /api/tasks/:id`, `POST /api/task-groups/:id/run` | delete (not while working) / activate a group's wait and failed tasks. 204 |
